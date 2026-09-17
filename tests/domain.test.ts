@@ -1,0 +1,24 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { randomBytes } from 'node:crypto';
+import { scheduledUTC,captionSchema,postSchema,characterCount,editable } from '../src/lib/domain';
+import { encryptToken,decryptToken } from '../src/lib/crypto';
+import { mediaPath,imageMime } from '../src/lib/media';
+const key=randomBytes(32).toString('hex');
+test('token encryption is randomized and bound to the owner',()=>{const a=encryptToken('secret-thread-token','user-a',key);const b=encryptToken('secret-thread-token','user-a',key);assert.notEqual(a,b);assert.equal(decryptToken(a,'user-a',key),'secret-thread-token');assert.throws(()=>decryptToken(a,'user-b',key));assert.throws(()=>decryptToken(a,'user-a',randomBytes(32).toString('hex')));assert(!a.includes('secret-thread-token'));});
+test('ciphertext tampering and malformed keys are rejected',()=>{const a=encryptToken('token','a',key);const parts=a.split('.');parts[3]=Buffer.from('tampered').toString('base64url');assert.throws(()=>decryptToken(parts.join('.'),'a',key));assert.throws(()=>encryptToken('value','a','weak'));});
+test('schedules preserve the selected timezone instead of the browser timezone',()=>{assert.equal(scheduledUTC('2027-01-02T09:00','Asia/Kuala_Lumpur',new Date('2027-01-01')),'2027-01-02T01:00:00.000Z');assert.equal(scheduledUTC('2027-01-02T09:00','America/New_York',new Date('2027-01-01')),'2027-01-02T14:00:00.000Z');});
+test('past dates, invalid dates, invalid zones and DST gaps are rejected',()=>{assert.throws(()=>scheduledUTC('2027-01-01T09:00','Asia/Kuala_Lumpur',new Date('2027-01-02')));assert.throws(()=>scheduledUTC('2027-02-30T09:00','UTC'));assert.throws(()=>scheduledUTC('2027-01-01T09:00','Wrong/Zone'));assert.throws(()=>scheduledUTC('2027-03-14T02:30','America/New_York',new Date('2027-03-01')));});
+test('500 Unicode characters accepted; client cannot smuggle privileged post fields',()=>{assert.equal(characterCount('✨😀'),2);assert.equal(captionSchema.parse('😀'.repeat(500)).length,1000);assert.throws(()=>captionSchema.parse('a'.repeat(501)));const p=postSchema.parse({title:'Draft',caption:'Hello',status:'published',user_id:'someone',platform_post_id:'fake'});assert(!('status'in p));assert(!('user_id'in p));});
+test('private image URLs are owner-scoped and cannot request external/internal hosts',()=>{const user='2a40c465-ff31-4052-a45d-98f1001a1292';const path=`${user}/f05c9a9e-3608-4a13-a40b-af41866ec0e8.png`;assert.equal(mediaPath(`/api/media?path=${encodeURIComponent(path)}`,user),path);for(const url of ['http://127.0.0.1/admin','https://evil.test/a.png','//evil.test/api/media','/api/media?path=../secret',`/api/media?path=other/${path.split('/')[1]}`])assert.throws(()=>mediaPath(url,user));});
+test('image content, not a claimed MIME type, determines accepted uploads',()=>{assert.equal(imageMime(Buffer.from([255,216,255,224])),'image/jpeg');assert.throws(()=>imageMime(Buffer.from('<svg onload="alert(1)">')));assert.throws(()=>imageMime(Buffer.from('<html>')));});
+test('platform validation: threads and both enforce 500 chars, instagram allows up to 2200 chars',()=>{
+  const pThreads=postSchema.safeParse({title:'Test',caption:'a'.repeat(501),platform:'threads'});
+  assert.equal(pThreads.success,false);
+  const pBoth=postSchema.safeParse({title:'Test',caption:'a'.repeat(501),platform:'both'});
+  assert.equal(pBoth.success,false);
+  const pIgOk=postSchema.safeParse({title:'Test',caption:'a'.repeat(1200),platform:'instagram'});
+  assert.equal(pIgOk.success,true);
+  const pIgTooLong=postSchema.safeParse({title:'Test',caption:'a'.repeat(2201),platform:'instagram'});
+  assert.equal(pIgTooLong.success,false);
+});
