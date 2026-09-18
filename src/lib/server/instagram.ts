@@ -44,7 +44,7 @@ export async function instagramRequest<T>(
 
 export async function startInstagram(userId: string) {
   await requireSubscription(userId);
-  const clientId = process.env.INSTAGRAM_APP_ID || env('META_APP_ID');
+  const clientId = env('INSTAGRAM_APP_ID');
   env('TOKEN_ENCRYPTION_KEY');
   const redirectUri = process.env.INSTAGRAM_REDIRECT_URI || `${appUrl()}/api/auth/instagram/callback`;
 
@@ -87,8 +87,8 @@ export async function finishInstagram(req: Request, userId: string) {
 
   try {
     await requireSubscription(userId);
-    const clientId = process.env.INSTAGRAM_APP_ID || env('META_APP_ID');
-    const clientSecret = process.env.INSTAGRAM_APP_SECRET || env('META_APP_SECRET');
+    const clientId = env('INSTAGRAM_APP_ID');
+    const clientSecret = env('INSTAGRAM_APP_SECRET');
     const redirectUri = process.env.INSTAGRAM_REDIRECT_URI || `${appUrl()}/api/auth/instagram/callback`;
 
     // Step 1: Exchange code for short-lived access token

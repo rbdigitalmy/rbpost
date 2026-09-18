@@ -6,3 +6,6 @@ node_modules/
 test-results/
 *.tsbuildinfo
 .local/
+
+# Local Netlify folder
+.netlify
