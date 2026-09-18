@@ -10,8 +10,8 @@ import { publishImageUrl } from './images';
 const GRAPH_URL = 'https://graph.instagram.com/v21.0';
 
 export class InstagramError extends Error {
-  constructor(public status: number, public providerCode: number | null) {
-    super('Instagram request failed');
+  constructor(public status: number, public providerCode: number | null, public details?: unknown) {
+    super(`Instagram request failed with status ${status}`);
   }
 }
 
@@ -37,7 +37,7 @@ export async function instagramRequest<T>(
   });
   const value = await response.json();
   if (!response.ok || value.error) {
-    throw new InstagramError(response.status, value.error?.code || null);
+    throw new InstagramError(response.status, value.error?.code || null, value);
   }
   return value as T;
 }
@@ -58,8 +58,9 @@ export async function startInstagram(userId: string) {
     maxAge: 600,
   });
 
-  const url = new URL('https://api.instagram.com/oauth/authorize');
+  const url = new URL('https://www.instagram.com/oauth/authorize');
   url.search = new URLSearchParams({
+    force_reauth: 'true',
     client_id: clientId,
     redirect_uri: redirectUri,
     scope: 'instagram_business_basic,instagram_business_content_publish',
@@ -112,10 +113,11 @@ export async function finishInstagram(req: Request, userId: string) {
     // Step 2: Exchange for long-lived access token
     const long = await instagramRequest<{ access_token: string; expires_in: number }>(
       'access_token',
-      shortData.access_token,
+      undefined,
       {
         grant_type: 'ig_exchange_token',
         client_secret: clientSecret,
+        access_token: shortData.access_token,
       }
     );
 
@@ -163,7 +165,7 @@ export async function finishInstagram(req: Request, userId: string) {
     await logTechnical(userId, null, 'instagram_oauth_failed', {
       type: e instanceof InstagramError ? 'provider' : 'internal',
       message: (e as Error).message,
-      details: String(e)
+      details: e instanceof InstagramError ? e.details : String(e)
     });
     return NextResponse.redirect(`${appUrl()}/connections?error=connection`);
   }

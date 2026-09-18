@@ -25,7 +25,7 @@ export async function finishThreads(req:Request,userId:string){
  try{
   await requireSubscription(userId);
   const short=await threadsRequest<{access_token:string;user_id:string}>('oauth/access_token',undefined,{client_id:env('META_APP_ID'),client_secret:env('META_APP_SECRET'),code:q.get('code')!,grant_type:'authorization_code',redirect_uri:env('THREADS_REDIRECT_URI')},'POST');
-  const long=await threadsRequest<{access_token:string;expires_in:number}>('access_token',short.access_token,{grant_type:'th_exchange_token',client_secret:env('META_APP_SECRET')});
+  const long=await threadsRequest<{access_token:string;expires_in:number}>('access_token',undefined,{grant_type:'th_exchange_token',client_secret:env('META_APP_SECRET'),access_token:short.access_token});
   const profile=await threadsRequest<{id:string;username:string}>('v1.0/me',long.access_token,{fields:'id,username'});
   if(!profile.id||!profile.username||!long.access_token||!Number.isFinite(long.expires_in))throw new Error('Invalid OAuth response');
    const {data:old,error}=await db().from('social_accounts').select('platform_user_id').eq('user_id',userId).eq('platform','threads').maybeSingle();checkDB(error);
