@@ -1,6 +1,38 @@
 {
-  "name": "threads-ai", "version": "0.1.0", "private": true,
-  "scripts": {"dev":"next dev --hostname 127.0.0.1", "build":"next build", "start":"next start --hostname 127.0.0.1", "typecheck":"tsc --noEmit", "test":"tsx --test tests/*.test.ts", "verify:live":"node scripts/verify-live.mjs"},
-  "dependencies": {"next":"latest","react":"latest","react-dom":"latest","@supabase/ssr":"latest","@supabase/supabase-js":"latest","stripe":"latest","zod":"latest","lucide-react":"latest","date-fns":"latest","date-fns-tz":"latest","server-only":"latest"},
-  "devDependencies": {"typescript":"latest","@types/node":"latest","@types/react":"latest","@types/react-dom":"latest","tsx":"latest","@playwright/test":"latest","@electric-sql/pglite":"latest","tailwindcss":"latest","@tailwindcss/postcss":"latest","@netlify/plugin-nextjs":"latest"}
+  "name": "threads-ai",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev --hostname 127.0.0.1",
+    "build": "next build",
+    "start": "next start --hostname 127.0.0.1",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test tests/*.test.ts",
+    "verify:live": "node scripts/verify-live.mjs"
+  },
+  "dependencies": {
+    "@supabase/ssr": "latest",
+    "@supabase/supabase-js": "latest",
+    "date-fns": "latest",
+    "date-fns-tz": "latest",
+    "lucide-react": "latest",
+    "next": "latest",
+    "react": "latest",
+    "react-dom": "latest",
+    "server-only": "latest",
+    "stripe": "latest",
+    "zod": "latest"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "latest",
+    "@netlify/functions": "6.0.0",
+    "@playwright/test": "latest",
+    "@tailwindcss/postcss": "latest",
+    "@types/node": "latest",
+    "@types/react": "latest",
+    "@types/react-dom": "latest",
+    "tailwindcss": "latest",
+    "tsx": "latest",
+    "typescript": "latest"
+  }
 }

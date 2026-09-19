@@ -125,6 +125,7 @@ export default function AuthScreen({ signup }: { signup: boolean }) {
           </p>
 
           <Link className="demo-link" href="/demo/dashboard">Explore demo workspace first <ArrowRight size={15} /></Link>
+          <nav className="auth-legal" aria-label="Legal"><Link href="/privacy">Privacy</Link><Link href="/terms">Terms</Link><Link href="/data-deletion">Data deletion</Link></nav>
         </form>
       </section>
     </main>

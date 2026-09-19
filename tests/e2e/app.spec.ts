@@ -138,3 +138,20 @@ test('landing, login and billing routes expose real navigation and clear unconfi
   await expect(page.getByRole('heading', { name: /Welcome back/ })).toBeVisible();
   await page.screenshot({ path: '.local/desktop-dashboard.png', fullPage: true });
 });
+
+test('production readiness pages, health check and security headers are available', async ({ page, request }) => {
+  for (const route of ['/privacy', '/terms', '/data-deletion']) {
+    const response = await page.goto(route);
+    expect(response?.status(), route).toBe(200);
+    await expect(page.locator('h1')).toBeVisible();
+    await expect(page.getByRole('navigation', { name: 'Legal documents' })).toBeVisible();
+  }
+
+  const health = await request.get('/api/health');
+  expect(health.status()).toBe(200);
+  expect(await health.json()).toMatchObject({ status: 'ok', database: 'ok' });
+
+  const home = await request.get('/');
+  expect(home.headers()['content-security-policy']).toContain("default-src 'self'");
+  expect(home.headers()['permissions-policy']).toContain('camera=()');
+});

@@ -22,6 +22,10 @@ async function allPosts(user:string){
 }
 async function handle(req:Request,context:Context){try{
  const {path}=await context.params;const route=path.join('/');const method=req.method;
+ if(method==='GET'&&route==='health'){
+  const started=Date.now();const client=db();const {error}=await client.from('plans').select('id',{count:'exact',head:true}).eq('active',true);checkDB(error);
+  return json({status:'ok',database:'ok',timestamp:new Date().toISOString(),latency_ms:Date.now()-started});
+ }
  if(method==='POST'&&route==='webhooks/payment')return json(await paymentWebhook(req));
  if(method==='GET'&&route.startsWith('cron/')){cronAuth(req);if(route==='cron/publish')return json(await runDuePosts());if(route==='cron/refresh')return json(await refreshTokens());throw new AppError('Not found',404);}
  if(['POST','PATCH','DELETE'].includes(method))sameOrigin(req);
@@ -91,6 +95,11 @@ async function handle(req:Request,context:Context){try{
  if(method==='POST'&&route==='billing/checkout'){await rate(user.id,'billing',5);const input=z.object({plan_id:z.enum(['starter','pro','business'])}).parse(await jsonBody(req));return json(await checkout(user.id,user.email||'',input.plan_id));}
  if(method==='POST'&&route==='billing/portal'){await rate(user.id,'billing',5);return json(await portal(user.id));}
  if(method==='PATCH'&&route==='settings'){const profile=z.object({name:z.string().trim().min(1).max(80),timezone:timezoneSchema,language:z.enum(['Bahasa Melayu','English'])}).parse(await jsonBody(req));const {error}=await db().from('users').update({...profile,updated_at:new Date().toISOString()}).eq('id',user.id);checkDB(error);return json(profile);}
+ if(method==='DELETE'&&route==='account'){
+  const client=db();
+  for(;;){const listed=await client.storage.from('post-images').list(user.id,{limit:100});checkDB(listed.error);if(!listed.data?.length)break;const removed=await client.storage.from('post-images').remove(listed.data.map(file=>`${user.id}/${file.name}`));checkDB(removed.error);}
+  const deleted=await client.auth.admin.deleteUser(user.id);checkDB(deleted.error);return json({deleted:true});
+ }
  if(path[0]==='admin'){
   requireAdmin(user.id);
   if(method==='GET'&&route==='admin'){
@@ -100,5 +109,5 @@ async function handle(req:Request,context:Context){try{
   if(method==='PATCH'&&path[1]==='plans'&&path.length===3){const input=z.object({monthly_price:z.number().min(0).max(10000),monthly_post_limit:z.number().int().min(0).max(100000),monthly_image_limit:z.number().int().min(0).max(100000),active:z.boolean()}).parse(await jsonBody(req));const result=await db().from('plans').update(input).eq('id',path[2]).select('*').single();checkDB(result.error);return json(result.data);}
  }
  throw new AppError('Endpoint tidak ditemui.',404);
-}catch(e){return errorResponse(e);}}
+}catch(e){return await errorResponse(e);}}
 export const GET=handle;export const POST=handle;export const PATCH=handle;export const DELETE=handle;

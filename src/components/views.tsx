@@ -449,6 +449,8 @@ export function SettingsView(){
   const [busy,setBusy]=useState(false);
   const [error,setError]=useState('');
   const [reset,setReset]=useState(false);
+  const [deletingAccount,setDeletingAccount]=useState(false);
+  const [deleteConfirmation,setDeleteConfirmation]=useState('');
   return (
     <>
       <PageHeader
@@ -498,6 +500,14 @@ export function SettingsView(){
           </button>
         </form>
       </section>
+      {!demo&&<section className="panel settings-panel danger-zone">
+        <div className="form-fields">
+          <h2>Delete account and data</h2>
+          <p>Permanently remove your profile, posts, stored images, usage records, and saved social connection tokens. Published posts on Threads or Instagram are not removed.</p>
+          <button className="btn danger" onClick={()=>setDeletingAccount(true)}><Trash2 size={16}/>Delete account and data</button>
+          <p className="muted">Read the <Link href="/data-deletion">data deletion instructions</Link> before continuing.</p>
+        </div>
+      </section>}
       <section className="panel settings-panel">
         <div className="form-fields">
           <h2>{demo?'Demo data':'Your session'}</h2>
@@ -537,6 +547,20 @@ export function SettingsView(){
             }}>
               Reset data
             </button>
+          </div>
+        </Modal>
+      )}
+      {deletingAccount&&(
+        <Modal title="Permanently delete account?" onClose={()=>{setDeletingAccount(false);setDeleteConfirmation('');}}>
+          <div className="form-fields">
+            <p>This cannot be undone. Type <strong>DELETE</strong> to confirm.</p>
+            <label>Confirmation<input autoComplete="off" value={deleteConfirmation} onChange={e=>setDeleteConfirmation(e.target.value)} /></label>
+            {error&&<div className="form-error" role="alert">{error}</div>}
+            <button className="btn danger" disabled={busy||deleteConfirmation!=='DELETE'} onClick={async()=>{
+              setBusy(true);setError('');
+              try{await api('account',{},'DELETE');await browserSupabase().auth.signOut({scope:'local'});router.replace('/?account=deleted');}
+              catch(e){setError((e as Error).message);setBusy(false);}
+            }}>{busy?<Spinner/>:<Trash2 size={16}/>}Permanently delete account</button>
           </div>
         </Modal>
       )}

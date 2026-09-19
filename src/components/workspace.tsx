@@ -72,7 +72,7 @@ export default function WorkspaceApp({demo,section,postId}:{demo:boolean;section
       </header>
       {demo&&<div className="demo-banner" role="region" aria-label="Demo notice"><span><span className="demo-dot"/>Demo mode <span className="demo-detail">— sample data stored in this browser. No posts will be sent to Threads or Instagram.</span></span><Link href="/signup">Open live account <ArrowUpRight size={14}/></Link></div>}
       <main className="content">{section==='dashboard'?<Dashboard/>:section==='create'?<Editor key={postId||'new'} postId={postId}/>:section==='calendar'?<CalendarView/>:section==='posts'?<PostsView/>:section==='connections'?<ConnectionsView/>:section==='billing'?<BillingView/>:section==='settings'?<SettingsView/>:<AdminView/>}</main>
-      <footer className="workspace-footer"><span>RB Post <span>·</span> Turn ideas into conversations on Threads & Instagram.</span><span>Focus on your voice.</span></footer>
+      <footer className="workspace-footer"><span>RB Post <span>·</span> Turn ideas into conversations on Threads & Instagram.</span><nav aria-label="Legal"><Link href="/privacy">Privacy</Link><Link href="/terms">Terms</Link><Link href="/data-deletion">Delete data</Link></nav></footer>
     </div>
     {toast&&<div role="status" className="toast"><Check size={18}/><span>{toast}</span><button className="icon-btn" aria-label="Close notification" onClick={()=>setToast('')}><X size={16}/></button></div>}
   </div></WorkspaceContext.Provider>;

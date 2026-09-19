@@ -104,12 +104,13 @@ export default function Home() {
               </article>
             ))}
           </div>
-          <small>Regenerations consume credits. Launch pricing subject to checkout terms.</small>
+          <small>Regenerations consume credits. Launch pricing is subject to our <Link href="/terms">Terms of Service</Link>.</small>
         </section>
       </main>
       <footer className="landing-footer">
         <Brand/>
         <span>Turn ideas into conversations.</span>
+        <nav className="footer-links" aria-label="Legal"><Link href="/privacy">Privacy</Link><Link href="/terms">Terms</Link><Link href="/data-deletion">Data deletion</Link></nav>
         <span>RB Post is an independent platform, not affiliated with Meta.</span>
       </footer>
     </div>

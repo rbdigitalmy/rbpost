@@ -59,13 +59,23 @@ export async function processPost(post:PublishPost){
    const created=await threadsRequest<{id:string}>(`v1.0/${account.platform_user_id}/threads`,token,params,'POST');if(!created.id)throw new Error('Missing container');container=created.id;
    const save=await db().from('posts').update({container_id:container}).eq('id',post.id).eq('status','publishing');checkDB(save.error);
   }
-  const status=await threadsRequest<{status:string;error_message?:string}>(`v1.0/${container}`,token,{fields:'status,error_message'});
-  if(status.status==='IN_PROGRESS'){
-   if(post.attempts>=8)throw new AppError('Gambar mengambil masa terlalu lama untuk diproses. Sila cuba semula.',502,'media_timeout');
-   const save=await db().from('posts').update({status:'scheduled',scheduled_at:post.scheduled_at||new Date().toISOString(),next_attempt_at:new Date(Date.now()+60_000).toISOString(),claimed_at:null}).eq('id',post.id).eq('status','publishing');checkDB(save.error);return;
+  let finished = false;
+  for (let i = 0; i < 5; i++) {
+    const status = await threadsRequest<{status:string;error_message?:string}>(`v1.0/${container}`, token, {fields:'status,error_message'});
+    if (status.status === 'FINISHED') {
+      finished = true;
+      break;
+    }
+    if (status.status === 'PUBLISHED') throw new AppError('Semak post ini di Threads sebelum mencuba lagi.', 409, 'outcome_unknown');
+    if (status.status === 'ERROR') throw new AppError(status.error_message || 'Visual belum boleh diterbitkan. Cuba jana atau muat naik semula.', 502, 'media_failed');
+    await new Promise((r) => setTimeout(r, 2000));
   }
-  if(status.status==='PUBLISHED')throw new AppError('Semak post ini di Threads sebelum mencuba lagi.',409,'outcome_unknown');
-  if(status.status!=='FINISHED')throw new AppError('Visual belum boleh diterbitkan. Cuba jana atau muat naik semula.',502,'media_failed');
+  if (!finished) {
+    if (post.attempts >= 8) throw new AppError('Gambar mengambil masa terlalu lama untuk diproses. Sila cuba semula.', 502, 'media_timeout');
+    const save = await db().from('posts').update({status:'scheduled', scheduled_at:post.scheduled_at||new Date().toISOString(), next_attempt_at:new Date(Date.now()+60_000).toISOString(), claimed_at:null}).eq('id',post.id).eq('status','publishing');
+    checkDB(save.error);
+    return;
+  }
   const marker=await db().from('posts').update({publish_attempted_at:new Date().toISOString()}).eq('id',post.id).eq('status','publishing').select('id').single();checkDB(marker.error);
   attempted=true;
   const published=await threadsRequest<{id:string}>(`v1.0/${account.platform_user_id}/threads_publish`,token,{creation_id:container},'POST');
