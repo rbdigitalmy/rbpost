@@ -16,7 +16,7 @@ export async function threadsRequest<T>(path:string,token:string|undefined,param
 export async function startThreads(userId:string){
  await requireSubscription(userId);const client=env('META_APP_ID');env('META_APP_SECRET');env('TOKEN_ENCRYPTION_KEY');
  const state=randomBytes(32).toString('hex');const jar=await cookies();jar.set('threads_oauth_state',`${userId}:${state}`,{httpOnly:true,secure:process.env.NODE_ENV==='production',sameSite:'lax',path:'/',maxAge:600});
- const url=new URL('https://threads.net/oauth/authorize');url.search=new URLSearchParams({client_id:client,redirect_uri:env('THREADS_REDIRECT_URI'),scope:'threads_basic,threads_content_publish',response_type:'code',state}).toString();return {url:url.toString()};
+ const url=new URL('https://threads.net/oauth/authorize');url.search=new URLSearchParams({force_reauth:'true',client_id:client,redirect_uri:env('THREADS_REDIRECT_URI'),scope:'threads_basic,threads_content_publish',response_type:'code',state}).toString();return {url:url.toString()};
 }
 export async function finishThreads(req:Request,userId:string){
  const jar=await cookies();const state=jar.get('threads_oauth_state')?.value;jar.delete('threads_oauth_state');const q=new URL(req.url).searchParams;const expected=`${userId}:${q.get('state')||''}`;

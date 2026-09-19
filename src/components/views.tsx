@@ -226,10 +226,12 @@ export function ConnectionsView(){
   const {data,demo,notify,reload,base}=useWorkspace();
   const [busy,setBusy]=useState('');
   const [error,setError]=useState('');
+  const [threadsConnectOpen,setThreadsConnectOpen]=useState(false);
   const [confirm,setConfirm]=useState<'threads'|'instagram'|null>(null);
   useEffect(()=>{
     const errorCode=new URLSearchParams(window.location.search).get('error');
-    if(errorCode)setError('Connection failed. Please try again and grant account permissions.');
+    if(errorCode==='different_account')setError('This RB Post profile is already linked to a different Threads account. Disconnect the existing Threads account first, then connect the account you want.');
+    else if(errorCode)setError('Connection failed. Please try again and grant account permissions.');
   },[]);
   const threadsAcc=data.account;
   const igAcc=data.instagramAccount||data.accounts?.instagram;
@@ -296,7 +298,7 @@ export function ConnectionsView(){
             <p>Sign in to Threads and grant access to automatically share posts.</p>
           )}
           <div className="button-row">
-            <button className="btn primary" disabled={!!busy} onClick={()=>connect('threads')}>
+            <button className="btn primary" disabled={!!busy} onClick={()=>demo?connect('threads'):setThreadsConnectOpen(true)}>
               {busy==='threads'?<Spinner/>:<Link2 size={17}/>} {threadsAcc?'Reconnect Threads':'Connect Threads'}
             </button>
             {threadsAcc&&!demo&&(
@@ -345,6 +347,24 @@ export function ConnectionsView(){
           </div>
         </div>
       </section>
+      {threadsConnectOpen&&(
+        <Modal title="Choose the correct Threads account" onClose={()=>{if(!busy)setThreadsConnectOpen(false);}}>
+          <div className="form-fields">
+            <p>Threads uses the account that is currently signed in within this browser. It may continue as that account without showing a login screen.</p>
+            {threadsAcc&&<div className="notice warning"><ShieldCheck size={20}/><span>RB Post is currently linked to @{threadsAcc.username}. To replace it, close this window and disconnect that account first.</span></div>}
+            <div className="notice">
+              <ShieldCheck size={20}/>
+              <span>To connect a different account, open Threads below, switch or log out, then sign in to the account you want. Return here when it is active.</span>
+            </div>
+            <a className="btn secondary full" href="https://www.threads.com/login/" target="_blank" rel="noopener noreferrer">
+              Open Threads to switch account <ArrowUpRight size={16}/>
+            </a>
+            <button className="btn primary full" disabled={!!busy} onClick={()=>{setThreadsConnectOpen(false);void connect('threads');}}>
+              {busy==='threads'?<Spinner/>:<Link2 size={17}/>} Continue with active Threads account
+            </button>
+          </div>
+        </Modal>
+      )}
       {confirm&&(
         <Modal title={`Disconnect ${confirm==='threads'?'Threads':'Instagram'}?`} onClose={()=>{if(!busy)setConfirm(null);}}><div className="form-fields"><p>Scheduled posts to {confirm==='threads'?'Threads':'Instagram'} will fail until you reconnect this account.</p><button disabled={!!busy} className="btn danger" onClick={()=>disconnect(confirm)}>{busy?<Spinner/>:<Trash2 size={16}/>} Disconnect</button></div></Modal>
       )}

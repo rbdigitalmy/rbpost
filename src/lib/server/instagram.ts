@@ -82,7 +82,9 @@ export async function finishInstagram(req: Request, userId: string) {
     return NextResponse.redirect(`${appUrl()}/connections?error=state`);
   }
   if (q.has('error') || !q.get('code')) {
-    return NextResponse.redirect(`${appUrl()}/connections?error=cancelled`);
+    const reason = q.get('error_reason') || q.get('error');
+    const errorCode = reason === 'insufficient_developer_role' ? 'developer_role' : 'cancelled';
+    return NextResponse.redirect(`${appUrl()}/connections?error=${errorCode}`);
   }
 
   try {
