@@ -1319,6 +1319,12 @@ select {
   font-weight: 500;
 }
 
+.btn.secondary .button-credit,
+.btn.ghost .button-credit {
+  border-left-color: var(--border);
+  color: var(--text-muted);
+}
+
 .caption-input {
   min-height: 190px;
 }
