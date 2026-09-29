@@ -33,6 +33,8 @@ import {
 } from '@/lib/domain';
 import { createDemo } from '@/lib/demo';
 import { browserSupabase } from '@/lib/supabase/browser';
+import { reconnectRequired } from '@/lib/automation';
+import { ReconnectNotice } from './automations';
 
 export function PostsView() {
   const { data, base, removePost, notify, reload, loadMorePublished, demo } = useWorkspace();
@@ -432,7 +434,9 @@ export function ConnectionsView() {
             {threadsAcc?.status === 'connected'
               ? demo
                 ? 'Demo Sample'
-                : 'Connected'
+                : reconnectRequired({ platform: 'threads', scopes: threadsAcc.scopes })
+                  ? 'Reconnect required'
+                  : 'Connected'
               : threadsAcc
                 ? 'Reconnect'
                 : 'Not Connected'}
@@ -454,6 +458,7 @@ export function ConnectionsView() {
           ) : (
             <p>Sign in to Threads and grant access to automatically share posts.</p>
           )}
+          {threadsAcc && !demo && <ReconnectNotice platform="threads" scopes={threadsAcc.scopes} />}
           <div className="button-row">
             <button
               className="btn primary"
@@ -486,7 +491,9 @@ export function ConnectionsView() {
             {igAcc?.status === 'connected'
               ? demo
                 ? 'Demo Sample'
-                : 'Connected'
+                : reconnectRequired({ platform: 'instagram', scopes: igAcc.scopes })
+                  ? 'Reconnect required'
+                  : 'Connected'
               : igAcc
                 ? 'Reconnect'
                 : 'Not Connected'}
@@ -508,6 +515,7 @@ export function ConnectionsView() {
           ) : (
             <p>Connect an Instagram Creator or Business account to share visual posts directly.</p>
           )}
+          {igAcc && !demo && <ReconnectNotice platform="instagram" scopes={igAcc.scopes} />}
           <div className="notice">
             <ShieldCheck size={20} />
             <span>You are always in control. Review every post before scheduling.</span>

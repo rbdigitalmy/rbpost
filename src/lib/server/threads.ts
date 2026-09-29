@@ -7,6 +7,7 @@ import { type Post } from '../domain';
 import { AppError, appUrl, db, env, checkDB, requireSubscription, logTechnical } from './core';
 import { publishImageUrl } from './images';
 import { InstagramError, ThreadsError, errorSummary, reconnectPlatform, type SocialPlatform } from '../provider-errors';
+import { threadsScopes } from '../automation';
 export { ThreadsError };
 const API = 'https://graph.threads.net';
 export async function threadsRequest<T>(
@@ -27,7 +28,7 @@ export async function threadsRequest<T>(
     signal: AbortSignal.timeout(25_000),
     cache: 'no-store',
   });
-  const value = await response.json();
+  const value = await response.json().catch(() => ({}));
   if (!response.ok || value.error) throw new ThreadsError(response.status, value.error?.code || null, value);
   return value as T;
 }
@@ -50,7 +51,7 @@ export async function startThreads(userId: string) {
     force_reauth: 'true',
     client_id: client,
     redirect_uri: env('THREADS_REDIRECT_URI'),
-    scope: 'threads_basic,threads_content_publish',
+    scope: threadsScopes.join(','),
     response_type: 'code',
     state,
   }).toString();
@@ -115,6 +116,9 @@ export async function finishThreads(req: Request, userId: string) {
           access_token_encrypted: encryptToken(long.access_token, userId, env('TOKEN_ENCRYPTION_KEY')),
           expires_at: new Date(Date.now() + long.expires_in * 1000).toISOString(),
           status: 'connected',
+          // Threads token responses do not list grants; a consent that skipped a scope surfaces as a
+          // permission error on first use, which pauses the automation and asks for reconnection.
+          scopes: [...threadsScopes],
           updated_at: new Date().toISOString(),
         },
         { onConflict: 'user_id,platform' },
@@ -477,5 +481,8 @@ export async function refreshTokens() {
       else imagesRemoved = names.length;
     }
   }
-  return { refreshed, imagesRemoved };
+  // Automation retention: inbound event metadata and reply audit rows older than 30 days.
+  const purged = await client.rpc('purge_automation_data', { p_days: 30 });
+  if (purged.error) await logTechnical(null, null, 'automation_purge_failed', { code: purged.error.code || null });
+  return { refreshed, imagesRemoved, automationEventsPurged: Number(purged.data) || 0 };
 }

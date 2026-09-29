@@ -8,7 +8,17 @@ export default async function Page({ params }: { params: Promise<{ view: string[
   const parts = demo ? view.slice(1) : view;
   const section = parts[0] || 'dashboard';
   if (
-    !['dashboard', 'create', 'calendar', 'posts', 'connections', 'billing', 'settings', 'admin'].includes(section) ||
+    ![
+      'dashboard',
+      'create',
+      'calendar',
+      'posts',
+      'connections',
+      'automations',
+      'billing',
+      'settings',
+      'admin',
+    ].includes(section) ||
     parts.length > 2 ||
     (parts.length === 2 && section !== 'create')
   )

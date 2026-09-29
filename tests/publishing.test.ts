@@ -186,7 +186,8 @@ test('logged provider failures keep only a bounded summary, never the raw payloa
   for (const e of [new ThreadsError(400, 100, payload), new InstagramError(400, 100, payload)]) {
     const summary = errorSummary(e);
     assert.equal(summary.type, 'provider');
-    assert.equal((summary as { provider_message: string }).provider_message.length, 300);
+    assert.equal((summary as { provider_type: string }).provider_type, 'OAuthException');
+    assert.equal('provider_message' in summary, false, 'provider text can echo user content');
     assert.doesNotMatch(JSON.stringify(summary), /leak/);
     assert.doesNotMatch(e.message, /leak/);
   }

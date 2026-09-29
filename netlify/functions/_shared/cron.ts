@@ -1,7 +1,7 @@
 import type { Context } from '@netlify/functions';
 import { timingSafeEqual } from 'node:crypto';
 
-export type CronJob = 'publish' | 'refresh';
+export type CronJob = 'publish' | 'refresh' | 'automation';
 
 export function cronSecret() {
   const secret = Netlify.env.get('CRON_SECRET');

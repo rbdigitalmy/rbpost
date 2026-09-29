@@ -98,13 +98,13 @@ export async function postRoutes({ req, method, path, route, user }: ApiRequest)
       client.from('users').select('name,email,timezone,language').eq('id', user.id).single(),
       client
         .from('social_accounts')
-        .select('id,username,status,expires_at,platform')
+        .select('id,username,status,expires_at,platform,scopes')
         .eq('user_id', user.id)
         .eq('platform', 'threads')
         .maybeSingle(),
       client
         .from('social_accounts')
-        .select('id,username,status,expires_at,platform')
+        .select('id,username,status,expires_at,platform,scopes')
         .eq('user_id', user.id)
         .eq('platform', 'instagram')
         .maybeSingle(),

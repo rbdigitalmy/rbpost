@@ -174,3 +174,34 @@ test('production readiness pages, health check and security headers are availabl
   expect(home.headers()['content-security-policy']).toContain("default-src 'self'");
   expect(home.headers()['permissions-policy']).toContain('camera=()');
 });
+
+test('demo automations: Meta warnings, per-account settings and emergency pause; unsigned webhooks rejected', async ({
+  page,
+  request,
+}) => {
+  await page.goto('/demo/automations');
+  await expect(page.getByRole('heading', { name: 'Automations', exact: true })).toBeVisible();
+  await expect(page.getByText(/Instagram only lets you message people who contacted you first/)).toBeVisible();
+  await expect(page.getByText(/Threads automation posts public replies/)).toBeVisible();
+
+  const instagram = page.getByRole('region', { name: /Instagram · @alex\.visuals/ });
+  await instagram.getByRole('switch', { name: /Automation for this account/ }).check();
+  await instagram.getByRole('switch', { name: /Reply publicly to new comments/ }).check();
+  await instagram.getByLabel('Public comment reply').fill('Thanks for your comment!');
+  await instagram.getByRole('button', { name: 'Save automation' }).click();
+  await expect(page.getByRole('status')).toContainText('Demo settings updated');
+  await expect(instagram.locator('.pill', { hasText: /^On$/ })).toBeVisible();
+
+  await page.getByRole('button', { name: 'Pause all', exact: true }).click();
+  await page.getByRole('button', { name: 'Pause all automations' }).click();
+  await expect(instagram.locator('.pill', { hasText: /^Off$/ })).toBeVisible();
+  await expect(instagram.getByRole('switch', { name: /Automation for this account/ })).not.toBeChecked();
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+
+  const unsigned = await request.post('/api/webhooks/instagram', { data: { object: 'instagram', entry: [] } });
+  expect([401, 503]).toContain(unsigned.status());
+  const verify = await request.get('/api/webhooks/threads?hub.mode=subscribe&hub.verify_token=wrong&hub.challenge=123');
+  expect(verify.status()).toBe(403);
+});

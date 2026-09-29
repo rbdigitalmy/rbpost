@@ -24,6 +24,7 @@ import {
   Clock3,
   Image as ImageIcon,
   FileText,
+  Bot,
 } from 'lucide-react';
 import {
   Brand,
@@ -40,6 +41,7 @@ import { createDemo, DEMO_KEY } from '@/lib/demo';
 import { type Workspace, type Post, type PostInput, dateLabel } from '@/lib/domain';
 import Editor from './editor';
 import { CalendarView, PostsView, ConnectionsView, BillingView, SettingsView, AdminView } from './views';
+import { AutomationsView } from './automations';
 
 export async function api<T>(path: string, body?: unknown, method?: string): Promise<T> {
   const res = await fetch(`/api/${path}`, {
@@ -83,6 +85,7 @@ const nav = [
   ['calendar', 'Calendar', CalendarDays],
   ['posts', 'All Posts', Files],
   ['connections', 'Connections', Link2],
+  ['automations', 'Automations', Bot],
   ['billing', 'Billing', CreditCard],
   ['settings', 'Settings', Settings],
 ] as const;
@@ -332,6 +335,8 @@ export default function WorkspaceApp({ demo, section, postId }: { demo: boolean;
               <PostsView />
             ) : section === 'connections' ? (
               <ConnectionsView />
+            ) : section === 'automations' ? (
+              <AutomationsView />
             ) : section === 'billing' ? (
               <BillingView />
             ) : section === 'settings' ? (

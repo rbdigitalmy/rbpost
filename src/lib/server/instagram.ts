@@ -7,6 +7,7 @@ import { type Post } from '../domain';
 import { AppError, appUrl, db, env, checkDB, requireSubscription, logTechnical } from './core';
 import { instagramImageUrl } from './images';
 import { InstagramError, errorSummary } from '../provider-errors';
+import { instagramScopes, parseGrantedScopes } from '../automation';
 
 export { InstagramError };
 
@@ -36,11 +37,36 @@ export async function instagramRequest<T>(
     signal: AbortSignal.timeout(25_000),
     cache: 'no-store',
   });
-  const value = await response.json();
+  const value = await response.json().catch(() => ({}));
   if (!response.ok || value.error) {
     throw new InstagramError(response.status, value.error?.code || null, value);
   }
   return value as T;
+}
+
+/** JSON POST for endpoints with nested bodies (messages). */
+export async function instagramPostJson<T>(path: string, token: string, body: unknown): Promise<T> {
+  const response = await fetch(`${GRAPH_URL}/${path}`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(25_000),
+    cache: 'no-store',
+  });
+  const value = await response.json().catch(() => ({}));
+  if (!response.ok || value.error) throw new InstagramError(response.status, value.error?.code || null, value);
+  return value as T;
+}
+
+/** Subscribes the connected professional account to this app's comment and message webhooks. */
+export async function subscribeInstagramWebhooks(token: string) {
+  const result = await instagramRequest<{ success?: boolean }>(
+    'me/subscribed_apps',
+    token,
+    { subscribed_fields: 'comments,messages' },
+    'POST',
+  );
+  if (!result.success) throw new Error('Instagram webhook subscription was not confirmed');
 }
 
 export async function startInstagram(userId: string) {
@@ -64,7 +90,7 @@ export async function startInstagram(userId: string) {
     force_reauth: 'true',
     client_id: clientId,
     redirect_uri: redirectUri,
-    scope: 'instagram_business_basic,instagram_business_content_publish',
+    scope: instagramScopes.join(','),
     response_type: 'code',
     state,
   }).toString();
@@ -107,9 +133,12 @@ export async function finishInstagram(req: Request, userId: string) {
       }),
       signal: AbortSignal.timeout(25_000),
     });
-    const shortData = await short.json();
+    const shortBody = await short.json().catch(() => ({}));
+    // Documented as {data:[{access_token,user_id,permissions}]}; the flat shape is also returned in practice.
+    const shortData = Array.isArray(shortBody?.data) ? shortBody.data[0] || {} : shortBody;
     if (!short.ok || !shortData.access_token)
-      throw new InstagramError(short.status, shortData.error?.code ?? shortData.code ?? null, shortData);
+      throw new InstagramError(short.status, shortBody.error?.code ?? shortBody.code ?? null, shortBody);
+    const scopes = parseGrantedScopes(shortData.permissions, instagramScopes);
 
     // Step 2: Exchange for long-lived access token
     const long = await instagramRequest<{ access_token: string; expires_in: number }>('access_token', undefined, {
@@ -119,9 +148,12 @@ export async function finishInstagram(req: Request, userId: string) {
     });
 
     // Step 3: Fetch Instagram user profile
-    const profile = await instagramRequest<{ id: string; username: string }>('me', long.access_token, {
-      fields: 'id,username',
-    });
+    // user_id is the professional account ID that webhooks send as entry.id; id is app-scoped.
+    const profile = await instagramRequest<{ id: string; username: string; user_id?: string | number }>(
+      'me',
+      long.access_token,
+      { fields: 'id,username,user_id' },
+    );
 
     if (!profile.id || !profile.username || !long.access_token || !Number.isFinite(long.expires_in)) {
       throw new Error('Invalid Instagram OAuth profile response');
@@ -152,15 +184,32 @@ export async function finishInstagram(req: Request, userId: string) {
           user_id: userId,
           platform: 'instagram',
           platform_user_id: profile.id,
+          provider_account_id: profile.user_id ? String(profile.user_id) : null,
           username: profile.username,
           access_token_encrypted: encryptToken(long.access_token, userId, env('TOKEN_ENCRYPTION_KEY')),
           expires_at: new Date(Date.now() + long.expires_in * 1000).toISOString(),
           status: 'connected',
+          scopes,
+          webhooks_subscribed_at: null,
           updated_at: new Date().toISOString(),
         },
         { onConflict: 'user_id,platform' },
       );
     checkDB(saved.error);
+
+    // Webhook delivery is best-effort at connect time; enabling an automation retries it.
+    if (scopes.includes('instagram_business_manage_comments') || scopes.includes('instagram_business_manage_messages'))
+      try {
+        await subscribeInstagramWebhooks(long.access_token);
+        const marked = await db()
+          .from('social_accounts')
+          .update({ webhooks_subscribed_at: new Date().toISOString() })
+          .eq('user_id', userId)
+          .eq('platform', 'instagram');
+        checkDB(marked.error);
+      } catch (e) {
+        await logTechnical(userId, null, 'instagram_webhook_subscribe_failed', errorSummary(e));
+      }
 
     return NextResponse.redirect(`${appUrl()}/connections?connected=instagram`);
   } catch (e) {

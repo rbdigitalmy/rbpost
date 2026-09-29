@@ -127,6 +127,10 @@ export function cronAuth(req: Request) {
     throw new AppError('Unauthorized', 401);
 }
 export async function readBody(req: Request, max = 20_000) {
+  return (await readRawBody(req, max)).toString('utf8');
+}
+/** Exact request bytes (webhook signatures are computed over these, not over re-encoded text). */
+export async function readRawBody(req: Request, max = 20_000) {
   const reader = req.body?.getReader();
   if (!reader) throw new AppError('Data diperlukan.');
   const chunks: Uint8Array[] = [];
@@ -141,7 +145,7 @@ export async function readBody(req: Request, max = 20_000) {
     }
     chunks.push(value);
   }
-  return Buffer.concat(chunks).toString('utf8');
+  return Buffer.concat(chunks);
 }
 export async function jsonBody(req: Request) {
   try {

@@ -47,6 +47,8 @@ export async function accountRoutes({ req, method, path, route, user }: ApiReque
         status: 'disconnected',
         access_token_encrypted: null,
         expires_at: null,
+        scopes: null,
+        webhooks_subscribed_at: null,
         updated_at: new Date().toISOString(),
       })
       .eq('user_id', user.id)

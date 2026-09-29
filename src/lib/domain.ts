@@ -91,6 +91,8 @@ export interface SocialAccount {
   username: string;
   status: string;
   expires_at: string | null;
+  /** Scopes granted at the last connection; null for legacy connections made before automation scopes existed. */
+  scopes?: string[] | null;
 }
 export interface Post extends PostInput {
   id: string;

@@ -2785,3 +2785,91 @@ select {
 nextjs-portal {
   display: none !important;
 }
+
+/* Automations */
+label.switch-row {
+  display: flex;
+  flex-direction: row;
+  gap: 12px;
+  align-items: flex-start;
+  cursor: pointer;
+}
+.switch-row input {
+  appearance: none;
+  flex-shrink: 0;
+  width: 36px;
+  height: 20px;
+  margin: 1px 0 0;
+  border-radius: 999px;
+  background: var(--border);
+  position: relative;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+.switch-row input::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--card-bg);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
+  transition: transform 0.15s ease;
+}
+.switch-row input:checked {
+  background: var(--primary);
+}
+.switch-row input:checked::after {
+  transform: translateX(16px);
+}
+.switch-row input:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+.switch-row input:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.switch-row > span {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.switch-row small {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-weight: 400;
+}
+.capability-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.capability-list .pill {
+  gap: 4px;
+}
+.automation-failures {
+  border-top: 1px solid var(--border-subtle);
+  padding-top: 12px;
+}
+.automation-failures h3 {
+  font-size: 13px;
+  margin-bottom: 8px;
+}
+.automation-failures ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+.automation-failures li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  align-items: center;
+  font-size: 13px;
+  min-width: 0;
+}

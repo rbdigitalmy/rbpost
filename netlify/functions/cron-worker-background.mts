@@ -8,7 +8,8 @@ export default async function (request: Request, context: Context) {
     if (request.method !== 'POST') return new Response('Method not allowed', { status: 405 });
     if (!authorized(request)) return new Response('Unauthorized', { status: 401 });
     const body = (await request.json()) as { job?: unknown };
-    if (body.job !== 'publish' && body.job !== 'refresh') return new Response('Invalid job', { status: 400 });
+    if (body.job !== 'publish' && body.job !== 'refresh' && body.job !== 'automation')
+      return new Response('Invalid job', { status: 400 });
     job = body.job;
     const response = await fetch(`${siteOrigin(context)}/api/cron/${job}`, {
       headers: { authorization: `Bearer ${cronSecret()}` },

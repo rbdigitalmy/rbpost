@@ -7,6 +7,7 @@ import {
   ensureProfile,
   errorResponse,
   json,
+  logTechnical,
   requireUser,
   sameOrigin,
 } from '@/lib/server/core';
@@ -16,12 +17,16 @@ import { finishInstagram } from '@/lib/server/instagram';
 import { postRoutes } from '@/lib/server/api/posts';
 import { accountRoutes } from '@/lib/server/api/account';
 import { adminRoutes } from '@/lib/server/api/admin';
+import { automationRoutes } from '@/lib/server/api/automations';
 import type { RouteModule } from '@/lib/server/api/types';
+import { processAutomationQueue, receiveWebhook, runAutomation, webhookChallenge } from '@/lib/server/automation';
+import { errorSummary } from '@/lib/provider-errors';
+import { after } from 'next/server';
 
 export const runtime = 'nodejs';
 export const maxDuration = 240;
 type Context = { params: Promise<{ path: string[] }> };
-const modules: RouteModule[] = [postRoutes, accountRoutes, adminRoutes];
+const modules: RouteModule[] = [postRoutes, accountRoutes, adminRoutes, automationRoutes];
 async function handle(req: Request, context: Context) {
   try {
     const { path } = await context.params;
@@ -40,10 +45,24 @@ async function handle(req: Request, context: Context) {
       });
     }
     if (method === 'POST' && route === 'webhooks/payment') return json(await paymentWebhook(req));
+    if (route === 'webhooks/instagram' || route === 'webhooks/threads') {
+      if (method === 'GET') return webhookChallenge(req);
+      if (method !== 'POST') throw new AppError('Method not allowed', 405);
+      const { queued } = await receiveWebhook(route === 'webhooks/instagram' ? 'instagram' : 'threads', req);
+      // Acknowledge now; the minute cron picks up anything this run does not finish.
+      if (queued)
+        after(() =>
+          processAutomationQueue(20_000).catch(e =>
+            logTechnical(null, null, 'automation_after_failed', errorSummary(e)),
+          ),
+        );
+      return json({ received: true });
+    }
     if (method === 'GET' && route.startsWith('cron/')) {
       cronAuth(req);
       if (route === 'cron/publish') return json(await runDuePosts());
       if (route === 'cron/refresh') return json(await refreshTokens());
+      if (route === 'cron/automation') return json(await runAutomation());
       throw new AppError('Not found', 404);
     }
     if (['POST', 'PATCH', 'DELETE'].includes(method)) sameOrigin(req);
