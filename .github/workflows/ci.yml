@@ -1,0 +1,55 @@
+name: CI
+
+# Runs on GitHub only. It never deploys and uses no secrets: tests that need
+# live Supabase/Meta credentials skip themselves when .env.local is absent.
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run format:check
+      - run: npm test
+      - run: npm run build
+
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run build
+      - name: Start app
+        run: |
+          npx next start --hostname 127.0.0.1 -p 3000 &
+          npx --yes wait-on@8 --timeout 60000 http://127.0.0.1:3000/demo/dashboard
+      - run: npx playwright test
+        env:
+          # Playwright's bundled Chromium; the config defaults to installed Chrome for local runs.
+          PLAYWRIGHT_CHANNEL: chromium
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-results
+          path: .local/test-results
+          retention-days: 7

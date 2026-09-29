@@ -1,5 +1,9 @@
 import { test, expect } from '@playwright/test';
 import { fromZonedTime } from 'date-fns-tz';
+import fs from 'node:fs';
+
+// Checks that talk to real Supabase/Meta run only where .env.local exists (a developer machine), not in CI.
+const live = fs.existsSync('.env.local');
 
 test('demo: create, preview, upload, save, reload, schedule, filter and delete', async ({ page }) => {
   const errors: string[] = [];
@@ -64,7 +68,8 @@ test('demo: create, preview, upload, save, reload, schedule, filter and delete',
 });
 
 test('threads oauth authorization page loads correctly', async ({ page }) => {
-  const envText = require('fs').readFileSync('.env.local', 'utf8');
+  test.skip(!live, 'needs .env.local with Meta credentials');
+  const envText = fs.readFileSync('.env.local', 'utf8');
   const metaId = envText.match(/META_APP_ID=([^\r\n]+)/)?.[1]?.trim() || '';
   const redirectUri = envText.match(/THREADS_REDIRECT_URI=([^\r\n]+)/)?.[1]?.trim() || '';
   const authUrl = `https://threads.net/oauth/authorize?client_id=${metaId}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=threads_basic,threads_content_publish&response_type=code&state=test_state`;
@@ -99,9 +104,9 @@ test('validation, demo publishing guard, modal focus and missing production conf
   const csrf = await request.post('/api/posts', { data: { title: 'attack', caption: 'bad' } });
   expect(csrf.status()).toBe(403);
 
-  const live = await request.get('/api/workspace');
-  expect([401, 503]).toContain(live.status());
-  expect(await live.text()).not.toContain('SUPABASE_SERVICE_ROLE_KEY');
+  const workspace = await request.get('/api/workspace');
+  expect([401, 503]).toContain(workspace.status());
+  expect(await workspace.text()).not.toContain('SUPABASE_SERVICE_ROLE_KEY');
 
   const cron = await request.get('/api/cron/publish');
   expect([401, 503]).toContain(cron.status());
@@ -132,11 +137,13 @@ test('landing, login and billing routes expose real navigation and clear unconfi
   await page.goto('/');
   await expect(page.getByRole('heading', { name: /Your ideas/ })).toBeVisible();
 
-  await page.goto('/login');
-  await page.getByLabel('Email', { exact: true }).fill('test@example.com');
-  await page.getByLabel('Password', { exact: true }).fill('test-password');
-  await page.getByRole('button', { name: 'Sign in', exact: true }).click();
-  await expect(page.locator('.form-error')).toContainText(/Registration is not open|Invalid login credentials/);
+  if (live) {
+    await page.goto('/login');
+    await page.getByLabel('Email', { exact: true }).fill('test@example.com');
+    await page.getByLabel('Password', { exact: true }).fill('test-password');
+    await page.getByRole('button', { name: 'Sign in', exact: true }).click();
+    await expect(page.locator('.form-error')).toContainText(/Registration is not open|Invalid login credentials/);
+  }
 
   await page.goto('/demo/billing');
   await expect(page.getByText('RM19')).toBeVisible();
@@ -157,9 +164,11 @@ test('production readiness pages, health check and security headers are availabl
     await expect(page.getByRole('navigation', { name: 'Legal documents' })).toBeVisible();
   }
 
-  const health = await request.get('/api/health');
-  expect(health.status()).toBe(200);
-  expect(await health.json()).toMatchObject({ status: 'ok', database: 'ok' });
+  if (live) {
+    const health = await request.get('/api/health');
+    expect(health.status()).toBe(200);
+    expect(await health.json()).toMatchObject({ status: 'ok', database: 'ok' });
+  }
 
   const home = await request.get('/');
   expect(home.headers()['content-security-policy']).toContain("default-src 'self'");
