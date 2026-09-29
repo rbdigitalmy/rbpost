@@ -5,19 +5,16 @@ import { NextResponse } from 'next/server';
 import { encryptToken, decryptToken } from '../crypto';
 import { type Post } from '../domain';
 import { AppError, appUrl, db, env, checkDB, requireSubscription, logTechnical } from './core';
-import { publishImageUrl } from './images';
+import { instagramImageUrl } from './images';
+import { InstagramError } from '../provider-errors';
 
-const GRAPH_URL = 'https://graph.instagram.com/v21.0';
+export { InstagramError };
 
-export class InstagramError extends Error {
-  constructor(
-    public status: number,
-    public providerCode: number | null,
-    public details?: unknown,
-  ) {
-    super(`Instagram request failed with status ${status}`);
-  }
-}
+// Meta retires Graph API versions about two years after release; override without a deploy via INSTAGRAM_GRAPH_VERSION.
+const GRAPH_VERSION = /^v\d+\.\d+$/.test(process.env.INSTAGRAM_GRAPH_VERSION || '')
+  ? process.env.INSTAGRAM_GRAPH_VERSION
+  : 'v25.0';
+const GRAPH_URL = `https://graph.instagram.com/${GRAPH_VERSION}`;
 
 export async function instagramRequest<T>(
   path: string,
@@ -132,16 +129,22 @@ export async function finishInstagram(req: Request, userId: string) {
       throw new Error('Invalid Instagram OAuth profile response');
     }
 
-    const { data: old, error } = await db()
+    // Switching to a different Instagram account replaces the old connection; one Instagram account may belong to only one RB Post user.
+    const { data: owner, error } = await db()
       .from('social_accounts')
-      .select('platform_user_id')
-      .eq('user_id', userId)
+      .select('id,status')
       .eq('platform', 'instagram')
+      .eq('platform_user_id', profile.id)
+      .neq('user_id', userId)
       .maybeSingle();
     checkDB(error);
 
-    if (old && old.platform_user_id !== profile.id) {
-      return NextResponse.redirect(`${appUrl()}/connections?error=different_account`);
+    if (owner && owner.status !== 'disconnected') {
+      return NextResponse.redirect(`${appUrl()}/connections?error=account_in_use`);
+    }
+    if (owner) {
+      const released = await db().from('social_accounts').delete().eq('id', owner.id).eq('status', 'disconnected');
+      checkDB(released.error);
     }
 
     const saved = await db()
@@ -173,7 +176,35 @@ export async function finishInstagram(req: Request, userId: string) {
   }
 }
 
-export async function processInstagramPublish(post: Post & { user_id: string }): Promise<string> {
+export async function refreshInstagramToken(token: string) {
+  // Long-lived Instagram tokens are refreshed on the unversioned host with the token as a query parameter.
+  const url = new URL('https://graph.instagram.com/refresh_access_token');
+  url.search = new URLSearchParams({ grant_type: 'ig_refresh_token', access_token: token }).toString();
+  const response = await fetch(url, { signal: AbortSignal.timeout(25_000), cache: 'no-store' });
+  const value = await response.json();
+  if (!response.ok || value.error || !value.access_token || !Number.isFinite(value.expires_in)) {
+    throw new InstagramError(response.status, value.error?.code || null, value);
+  }
+  return value as { access_token: string; expires_in: number };
+}
+
+/**
+ * `beforePublish` runs immediately before the irreversible media_publish call so the caller can
+ * persist a publish-attempt marker; a failure after that point must never be retried automatically.
+ */
+export interface InstagramPublishOptions {
+  beforePublish?: () => Promise<void>;
+  /** Reuse a container created by an earlier attempt instead of uploading the image again. */
+  containerId?: string | null;
+  onContainer?: (id: string) => Promise<void>;
+  /** Status checks, 2 s apart, before giving up with `media_pending`. */
+  polls?: number;
+}
+
+export async function processInstagramPublish(
+  post: Post & { user_id: string },
+  { beforePublish, containerId, onContainer, polls = 5 }: InstagramPublishOptions = {},
+): Promise<string> {
   if (!post.image_url) {
     throw new AppError('Instagram memerlukan gambar untuk setiap penerbitan post.', 400, 'image_required');
   }
@@ -196,26 +227,29 @@ export async function processInstagramPublish(post: Post & { user_id: string }):
   }
 
   const token = decryptToken(account.access_token_encrypted, post.user_id, env('TOKEN_ENCRYPTION_KEY'));
-  const publicImg = await publishImageUrl(post.image_url, post.user_id);
 
-  // Step 1: Create Instagram container
-  const container = await instagramRequest<{ id: string }>(
-    `${account.platform_user_id}/media`,
-    token,
-    {
-      image_url: publicImg,
-      caption: post.caption,
-    },
-    'POST',
-  );
-
-  if (!container.id) {
-    throw new Error('Missing Instagram container ID');
+  // Step 1: Create Instagram container (or reuse the one from a previous attempt)
+  let container = containerId ? { id: containerId } : null;
+  if (!container) {
+    const publicImg = await instagramImageUrl(post.image_url, post.user_id);
+    container = await instagramRequest<{ id: string }>(
+      `${account.platform_user_id}/media`,
+      token,
+      {
+        image_url: publicImg,
+        caption: post.caption,
+      },
+      'POST',
+    );
+    if (!container.id) {
+      throw new Error('Missing Instagram container ID');
+    }
+    await onContainer?.(container.id);
   }
 
   // Step 2: Poll status
   let finished = false;
-  for (let i = 0; i < 5; i++) {
+  for (let i = 0; i < polls; i++) {
     const status = await instagramRequest<{ status_code?: string; error_message?: string }>(container.id, token, {
       fields: 'status_code,error_message',
     });
@@ -230,14 +264,12 @@ export async function processInstagramPublish(post: Post & { user_id: string }):
   }
 
   if (!finished) {
-    throw new AppError(
-      'Gambar Instagram mengambil masa terlalu lama untuk diproses. Sila cuba lagi sebentar.',
-      502,
-      'media_timeout',
-    );
+    // Still processing: the caller decides whether to retry later or give up.
+    throw new AppError('Gambar Instagram masih diproses.', 502, 'media_pending');
   }
 
   // Step 3: Publish container
+  await beforePublish?.();
   const published = await instagramRequest<{ id: string }>(
     `${account.platform_user_id}/media_publish`,
     token,

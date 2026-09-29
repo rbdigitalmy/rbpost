@@ -58,12 +58,20 @@ interface Context {
   base: string;
   notify: (message: string) => void;
   reload: () => Promise<void>;
+  loadMorePublished: () => Promise<void>;
   setData: React.Dispatch<React.SetStateAction<Workspace | null>>;
   savePost: (input: PostInput, id?: string) => Promise<Post>;
   removePost: (id: string) => Promise<void>;
   updatePost: (post: Post) => void;
 }
 const WorkspaceContext = createContext<Context | null>(null);
+/** Published history is paged in live mode, so count from the server total rather than the loaded rows. */
+export function publishedCount(data: Workspace) {
+  return data.publishedTotal ?? data.posts.filter(p => p.status === 'published').length;
+}
+export function totalPostCount(data: Workspace) {
+  return data.posts.filter(p => p.status !== 'published').length + publishedCount(data);
+}
 export function useWorkspace() {
   const ctx = useContext(WorkspaceContext);
   if (!ctx) throw new Error('Missing workspace');
@@ -135,6 +143,25 @@ export default function WorkspaceApp({ demo, section, postId }: { demo: boolean;
     },
     [],
   );
+  // A link to an older published post may point outside the loaded page: fetch it before opening the editor.
+  const missingPost = !demo && section === 'create' && !!postId && !!data && !data.posts.some(p => p.id === postId);
+  useEffect(() => {
+    if (!missingPost || !postId) return;
+    let active = true;
+    api<Post>(`posts/${postId}`)
+      .then(post => {
+        if (active) setData(d => (d ? { ...d, posts: [post, ...d.posts.filter(p => p.id !== post.id)] } : d));
+      })
+      .catch(e => {
+        if (active) {
+          notify(e.message);
+          router.replace(`${base}/posts`);
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, [missingPost, postId, notify, router, base]);
   function updatePost(post: Post) {
     setData(d => (d ? { ...d, posts: [post, ...d.posts.filter(p => p.id !== post.id)] } : d));
   }
@@ -157,6 +184,26 @@ export default function WorkspaceApp({ demo, section, postId }: { demo: boolean;
     }
     updatePost(post);
     return post;
+  }
+  async function loadMorePublished() {
+    if (demo || !data) return;
+    const oldest = data.posts
+      .filter(p => p.status === 'published' && p.published_at)
+      .sort((a, b) => a.published_at!.localeCompare(b.published_at!) || a.id.localeCompare(b.id))[0];
+    const page = await api<{ posts: Post[]; hasMore: boolean }>(
+      oldest
+        ? `posts?status=published&before=${encodeURIComponent(oldest.published_at!)}&before_id=${oldest.id}`
+        : 'posts?status=published',
+    );
+    setData(d =>
+      d
+        ? {
+            ...d,
+            posts: [...d.posts, ...page.posts.filter(p => !d.posts.some(x => x.id === p.id))],
+            hasMorePublished: page.hasMore,
+          }
+        : d,
+    );
   }
   async function removePost(id: string) {
     if (!demo) await api(`posts/${id}`, undefined, 'DELETE');
@@ -190,7 +237,7 @@ export default function WorkspaceApp({ demo, section, postId }: { demo: boolean;
     );
   const plan = data.plans.find(p => p.id === data.subscription?.plan_id);
   const quota = plan?.monthly_post_limit || 0;
-  const context = { data, demo, base, notify, reload, setData, savePost, removePost, updatePost };
+  const context = { data, demo, base, notify, reload, loadMorePublished, setData, savePost, removePost, updatePost };
   return (
     <WorkspaceContext.Provider value={context}>
       <div className="workspace">
@@ -208,7 +255,7 @@ export default function WorkspaceApp({ demo, section, postId }: { demo: boolean;
                   <Icon size={17} />
                 </span>
                 <span className="nav-label-text">{label}</span>
-                {id === 'posts' && <small className="nav-badge">{data.posts.length}</small>}
+                {id === 'posts' && <small className="nav-badge">{totalPostCount(data)}</small>}
               </Link>
             ))}
             {data.isAdmin && (
@@ -276,7 +323,11 @@ export default function WorkspaceApp({ demo, section, postId }: { demo: boolean;
             {section === 'dashboard' ? (
               <Dashboard />
             ) : section === 'create' ? (
-              <Editor key={postId || 'new'} postId={postId} />
+              missingPost ? (
+                <Spinner />
+              ) : (
+                <Editor key={postId || 'new'} postId={postId} />
+              )
             ) : section === 'calendar' ? (
               <CalendarView />
             ) : section === 'posts' ? (
@@ -363,7 +414,6 @@ function Dashboard() {
     .filter(p => p.status === 'scheduled')
     .sort((a, b) => (a.scheduled_at || '').localeCompare(b.scheduled_at || ''));
   const drafts = data.posts.filter(p => p.status === 'draft');
-  const published = data.posts.filter(p => p.status === 'published');
   const firstName = data.profile.name.split(' ')[0];
   return (
     <>
@@ -412,7 +462,7 @@ function Dashboard() {
         <div className="stat-card">
           <div className="stat-content">
             <span className="stat-label">Published</span>
-            <div className="stat-number">{published.length}</div>
+            <div className="stat-number">{publishedCount(data)}</div>
           </div>
           <div className="stat-icon-square">
             <FileText size={18} />

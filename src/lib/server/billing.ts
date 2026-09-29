@@ -82,6 +82,39 @@ export async function portal(userId: string) {
   });
   return { url: session.url };
 }
+// Called before account deletion: stop future charges immediately and expire any open checkout so it cannot create a new subscription.
+export async function cancelBilling(userId: string) {
+  const [sub, pending] = await Promise.all([
+    db().from('subscriptions').select('status,provider_subscription_id').eq('user_id', userId).maybeSingle(),
+    db().from('billing_checkouts').select('session_id,expires_at').eq('user_id', userId).maybeSingle(),
+  ]);
+  checkDB(sub.error);
+  checkDB(pending.error);
+  const subscriptionId =
+    sub.data && !['canceled', 'incomplete_expired'].includes(sub.data.status)
+      ? sub.data.provider_subscription_id
+      : null;
+  const sessionId =
+    pending.data?.session_id && Date.parse(pending.data.expires_at) > Date.now() ? pending.data.session_id : null;
+  if (!subscriptionId && !sessionId) return;
+  const client = stripe();
+  const missing = (e: unknown) =>
+    e instanceof Stripe.errors.StripeError && (e.code === 'resource_missing' || e.statusCode === 404);
+  if (sessionId) {
+    try {
+      await client.checkout.sessions.expire(sessionId);
+    } catch (e) {
+      if (!missing(e) && !(e instanceof Stripe.errors.StripeInvalidRequestError)) throw e;
+    }
+  }
+  if (subscriptionId) {
+    try {
+      await client.subscriptions.cancel(subscriptionId);
+    } catch (e) {
+      if (!missing(e)) throw e;
+    }
+  }
+}
 export async function paymentWebhook(req: Request) {
   const raw = await readBody(req, 1_000_000);
   const signature = req.headers.get('stripe-signature');
@@ -113,6 +146,14 @@ export async function paymentWebhook(req: Request) {
   const subscription = await client.subscriptions.retrieve(subscriptionId);
   const userId = subscription.metadata.user_id;
   if (!userId || !/^[0-9a-f-]{36}$/i.test(userId)) throw new AppError('Subscription owner not found', 400);
+  // Owner deleted their account (e.g. a checkout completed during deletion): never bill them, and acknowledge so Stripe stops retrying.
+  const owner = await db().from('users').select('id').eq('id', userId).maybeSingle();
+  checkDB(owner.error);
+  if (!owner.data) {
+    if (!['canceled', 'incomplete_expired'].includes(subscription.status))
+      await client.subscriptions.cancel(subscription.id);
+    return { received: true };
+  }
   const item = subscription.items.data[0];
   if (
     subscription.items.data.length !== 1 ||

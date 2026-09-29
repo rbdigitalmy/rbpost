@@ -10,7 +10,7 @@ test('demo: create, preview, upload, save, reload, schedule, filter and delete',
 
   await page.getByRole('link', { name: 'Create new post', exact: true }).click();
   await page.getByLabel('Topic or idea').fill('Content for a local coffee shop');
-  await page.getByRole('button', { name: /Generate post with AI/ }).click();
+  await page.getByRole('button', { name: /Generate text only/ }).click();
   await expect(page.locator('.thread-caption')).toContainText('coffee shop');
 
   await page.getByLabel('Internal title').fill('Morning coffee — test');
@@ -79,7 +79,7 @@ test('validation, demo publishing guard, modal focus and missing production conf
   request,
 }) => {
   await page.goto('/demo/create');
-  await page.getByRole('button', { name: /Generate post with AI/ }).click();
+  await page.getByRole('button', { name: /Generate text only/ }).click();
   await expect(page.locator('.form-error')).toContainText('Please enter a topic');
 
   await page.getByLabel('Caption', { exact: true }).fill('a'.repeat(501));

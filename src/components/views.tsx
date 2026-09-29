@@ -18,7 +18,7 @@ import {
   ShieldCheck,
   Sparkles,
 } from 'lucide-react';
-import { api, AtThreads, Empty, PageHeader, useWorkspace } from './workspace';
+import { api, AtThreads, Empty, PageHeader, publishedCount, totalPostCount, useWorkspace } from './workspace';
 import { Badge, PlatformBadge, AtInstagram, Modal, Spinner } from './ui';
 import {
   dateLabel,
@@ -35,7 +35,8 @@ import { createDemo } from '@/lib/demo';
 import { browserSupabase } from '@/lib/supabase/browser';
 
 export function PostsView() {
-  const { data, base, removePost, notify, reload, demo } = useWorkspace();
+  const { data, base, removePost, notify, reload, loadMorePublished, demo } = useWorkspace();
+  const [loadingMore, setLoadingMore] = useState(false);
   const [filter, setFilter] = useState('all');
   const [platformFilter, setPlatformFilter] = useState('all');
   const [query, setQuery] = useState('');
@@ -80,7 +81,13 @@ export function PostsView() {
                 onClick={() => setFilter(s)}
               >
                 {label}
-                <span>{s === 'all' ? data.posts.length : data.posts.filter(p => p.status === s).length}</span>
+                <span>
+                  {s === 'all'
+                    ? totalPostCount(data)
+                    : s === 'published'
+                      ? publishedCount(data)
+                      : data.posts.filter(p => p.status === s).length}
+                </span>
               </button>
             ))}
           </div>
@@ -178,6 +185,24 @@ export function PostsView() {
               Create post
             </Link>
           </Empty>
+        )}
+        {!demo && data.hasMorePublished && (filter === 'all' || filter === 'published') && (
+          <button
+            className="btn secondary"
+            disabled={loadingMore}
+            onClick={async () => {
+              setLoadingMore(true);
+              try {
+                await loadMorePublished();
+              } catch (e) {
+                notify((e as Error).message);
+              } finally {
+                setLoadingMore(false);
+              }
+            }}
+          >
+            {loadingMore ? <Spinner /> : <RotateCcw size={16} />}Load older published posts
+          </button>
         )}
       </section>
       {deleting && (
@@ -337,9 +362,13 @@ export function ConnectionsView() {
   const [confirm, setConfirm] = useState<'threads' | 'instagram' | null>(null);
   useEffect(() => {
     const errorCode = new URLSearchParams(window.location.search).get('error');
-    if (errorCode === 'different_account')
+    if (errorCode === 'account_in_use')
       setError(
-        'This RB Post profile is already linked to a different Threads account. Disconnect the existing Threads account first, then connect the account you want.',
+        'That account is already connected to another RB Post profile. Disconnect it there first, then try again.',
+      );
+    else if (errorCode === 'developer_role')
+      setError(
+        'This Instagram account is not a tester of the Meta app yet. Add it under App Roles in the Meta developer dashboard, then try again.',
       );
     else if (errorCode) setError('Connection failed. Please try again and grant account permissions.');
   }, []);
@@ -900,21 +929,48 @@ interface AdminStats {
   images: number;
   published: number;
   failed: number;
+  unknownCosts?: number;
   infra: number;
   settings: { copy_model: string; image_model: string };
   plans: Plan[];
 }
+interface UncertainGeneration {
+  id: string;
+  user_id: string;
+  email: string | null;
+  type: 'copy' | 'image';
+  model: string;
+  provider_id: string | null;
+  created_at: string;
+}
 export function AdminView() {
   const { data, demo, notify } = useWorkspace();
   const [stats, setStats] = useState<AdminStats | null>(null);
+  const [uncertain, setUncertain] = useState<UncertainGeneration[]>([]);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   useEffect(() => {
-    if (data.isAdmin && !demo)
+    if (data.isAdmin && !demo) {
       api<AdminStats>('admin')
         .then(setStats)
         .catch(e => setError(e.message));
+      api<UncertainGeneration[]>('admin/generations')
+        .then(setUncertain)
+        .catch(e => setError(e.message));
+    }
   }, [data.isAdmin, demo]);
+  async function resolve(g: UncertainGeneration, refund: boolean) {
+    setBusy(true);
+    try {
+      await api(`admin/generations/${g.id}/resolve`, { refund });
+      setUncertain(list => list.filter(x => x.id !== g.id));
+      notify(refund ? 'Credit refunded to the user.' : 'Credit kept as used.');
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
   if (!data.isAdmin)
     return <Empty title="Admin access required" description="This page is restricted to platform administrators." />;
   return (
@@ -936,6 +992,7 @@ export function AdminView() {
               ['Images this month', stats.images],
               ['Published posts', stats.published],
               ['Failed posts', stats.failed],
+              ['AI calls with unknown cost', stats.unknownCosts ?? 0],
               ['Estimated margin', `RM${(stats.mrr - stats.aiCost - stats.infra).toFixed(2)}`],
             ].map(([label, v]) => (
               <div className="stat-card" key={String(label)}>
@@ -944,6 +1001,60 @@ export function AdminView() {
               </div>
             ))}
           </div>
+          <section className="panel">
+            <div className="form-fields">
+              <h2>
+                Unconfirmed AI credits <span className="count">{uncertain.length}</span>
+              </h2>
+              <p>
+                The AI provider did not respond in time, so the credit is on hold. Check the provider ID in OpenRouter:
+                refund it if nothing was generated, or keep it if the request was billed.
+              </p>
+              {uncertain.length ? (
+                <div className="post-table-wrap">
+                  <table className="post-table">
+                    <thead>
+                      <tr>
+                        <th>User</th>
+                        <th>Type</th>
+                        <th>Requested</th>
+                        <th>
+                          <span className="sr-only">Actions</span>
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {uncertain.map(g => (
+                        <tr key={g.id}>
+                          <td>
+                            <strong>{g.email || g.user_id}</strong>
+                            <p>
+                              {g.model}
+                              {g.provider_id ? ` · ${g.provider_id}` : ''}
+                            </p>
+                          </td>
+                          <td>{g.type === 'copy' ? 'Caption' : 'Image'}</td>
+                          <td>{dateLabel(g.created_at, data.profile.timezone)}</td>
+                          <td>
+                            <div className="button-row">
+                              <button className="btn secondary" disabled={busy} onClick={() => resolve(g, true)}>
+                                Refund
+                              </button>
+                              <button className="btn ghost" disabled={busy} onClick={() => resolve(g, false)}>
+                                Keep
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <p className="muted">Nothing waiting for review.</p>
+              )}
+            </div>
+          </section>
           <section className="panel settings-panel">
             <form
               className="form-fields"

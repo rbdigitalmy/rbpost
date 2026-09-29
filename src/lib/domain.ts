@@ -133,6 +133,9 @@ export interface Workspace {
   usage: { copy_generations: number; image_generations: number; posts_published: number; estimated_cost: number };
   plans: Plan[];
   isAdmin: boolean;
+  /** Published posts are paged; these are absent in demo mode where everything is local. */
+  publishedTotal?: number;
+  hasMorePublished?: boolean;
 }
 export function characterCount(value: string) {
   return Array.from(value).length;

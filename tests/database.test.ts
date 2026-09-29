@@ -241,3 +241,59 @@ test('webhooks deduplicate events and do not regress subscription state from out
     await pg.close();
   }
 });
+
+test('operators settle unconfirmed AI credits exactly once: refund returns the credit, keep does not', async () => {
+  const pg = await setup();
+  try {
+    const reserve = async (type: string) =>
+      (await pg.query<{ id: string }>(`select public.reserve_generation('${alice}',$1,'model',null) id`, [type]))
+        .rows[0].id;
+    const copy = await reserve('copy');
+    const image = await reserve('image');
+    await pg.query(`select public.finish_generation($1,'uncertain')`, [copy]);
+    await pg.query(`select public.finish_generation($1,'uncertain')`, [image]);
+    const resolve = async (id: string, refund: boolean) =>
+      (await pg.query<{ ok: boolean }>('select public.resolve_generation($1,$2) ok', [id, refund])).rows[0].ok;
+    assert.equal(await resolve(copy, true), true);
+    assert.equal(await resolve(copy, true), false);
+    assert.equal(await resolve(image, false), true);
+    const usage = (
+      await pg.query<{ copy_generations: number; image_generations: number }>('select * from public.usage')
+    ).rows[0];
+    assert.deepEqual([usage.copy_generations, usage.image_generations], [0, 1]);
+    const statuses = (await pg.query<{ type: string; status: string }>('select type,status from public.generations'))
+      .rows;
+    assert.deepEqual(Object.fromEntries(statuses.map(r => [r.type, r.status])), { copy: 'failed', image: 'succeeded' });
+    await pg.exec('set role authenticated;');
+    await assert.rejects(pg.query('select public.resolve_generation($1,true)', [copy]), /permission denied/);
+  } finally {
+    await pg.close();
+  }
+});
+
+test('image cleanup lists only week-old files that no post references, including converted JPEG siblings', async () => {
+  const pg = await setup();
+  try {
+    await pg.exec(
+      `create schema storage; create table storage.objects(bucket_id text, name text, created_at timestamptz); grant usage on schema storage to service_role; grant select on storage.objects to service_role;`,
+    );
+    const used = '0c8f6a5e-2b1d-4c3a-9e8f-7a6b5c4d3e2f',
+      orphan = '1d9e7b6f-3c2e-4d4b-8f9a-8b7c6d5e4f3a',
+      fresh = '2eaf8c7a-4d3f-4e5c-9a0b-9c8d7e6f5a4b';
+    await pg.exec(`insert into public.posts(user_id,title,image_url) values('${alice}','With image','/api/media?path=${alice}%2F${used}.png');
+      insert into storage.objects values
+        ('post-images','${alice}/${used}.png',now()-interval '30 days'),
+        ('post-images','${alice}/${used}.jpg',now()-interval '30 days'),
+        ('post-images','${alice}/${orphan}.webp',now()-interval '30 days'),
+        ('post-images','${alice}/${fresh}.png',now()-interval '1 day'),
+        ('other-bucket','${alice}/${orphan}.png',now()-interval '30 days');
+      set role service_role;`);
+    const rows = (await pg.query<{ orphan_images: string }>('select * from public.orphan_images(100)')).rows;
+    assert.deepEqual(
+      rows.map(r => r.orphan_images),
+      [`${alice}/${orphan}.webp`],
+    );
+  } finally {
+    await pg.close();
+  }
+});

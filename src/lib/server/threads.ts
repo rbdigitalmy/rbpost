@@ -6,16 +6,9 @@ import { encryptToken, decryptToken } from '../crypto';
 import { type Post } from '../domain';
 import { AppError, appUrl, db, env, checkDB, requireSubscription, logTechnical } from './core';
 import { publishImageUrl } from './images';
+import { InstagramError, ThreadsError, reconnectPlatform, type SocialPlatform } from '../provider-errors';
+export { ThreadsError };
 const API = 'https://graph.threads.net';
-export class ThreadsError extends Error {
-  constructor(
-    public status: number,
-    public providerCode: number | null,
-    public details?: any,
-  ) {
-    super(`Threads request failed with status ${status}: ${JSON.stringify(details)}`);
-  }
-}
 export async function threadsRequest<T>(
   path: string,
   token: string | undefined,
@@ -99,15 +92,21 @@ export async function finishThreads(req: Request, userId: string) {
     });
     if (!profile.id || !profile.username || !long.access_token || !Number.isFinite(long.expires_in))
       throw new Error('Invalid OAuth response');
-    const { data: old, error } = await db()
+    // Switching to a different Threads account replaces the old connection; one Threads account may belong to only one RB Post user.
+    const { data: owner, error } = await db()
       .from('social_accounts')
-      .select('platform_user_id')
-      .eq('user_id', userId)
+      .select('id,status')
       .eq('platform', 'threads')
+      .eq('platform_user_id', profile.id)
+      .neq('user_id', userId)
       .maybeSingle();
     checkDB(error);
-    if (old && old.platform_user_id !== profile.id)
-      return NextResponse.redirect(`${appUrl()}/connections?error=different_account`);
+    if (owner && owner.status !== 'disconnected')
+      return NextResponse.redirect(`${appUrl()}/connections?error=account_in_use`);
+    if (owner) {
+      const released = await db().from('social_accounts').delete().eq('id', owner.id).eq('status', 'disconnected');
+      checkDB(released.error);
+    }
     const saved = await db()
       .from('social_accounts')
       .upsert(
@@ -135,7 +134,7 @@ export async function finishThreads(req: Request, userId: string) {
     return NextResponse.redirect(`${appUrl()}/connections?error=connection`);
   }
 }
-import { processInstagramPublish } from './instagram';
+import { processInstagramPublish, refreshInstagramToken } from './instagram';
 
 interface PublishPost extends Post {
   user_id: string;
@@ -144,6 +143,40 @@ interface PublishPost extends Post {
   attempts: number;
   publish_attempted_at: string | null;
 }
+const MAX_ATTEMPTS = 8;
+const platformName = (p: SocialPlatform) => (p === 'threads' ? 'Threads' : 'Instagram');
+
+/** Media is still processing: hand the post back to the scheduler to check again in a minute. */
+async function retryLater(post: PublishPost) {
+  const save = await db()
+    .from('posts')
+    .update({
+      status: 'scheduled',
+      scheduled_at: post.scheduled_at || new Date().toISOString(),
+      next_attempt_at: new Date(Date.now() + 60_000).toISOString(),
+      claimed_at: null,
+    })
+    .eq('id', post.id)
+    .eq('status', 'publishing');
+  checkDB(save.error);
+}
+
+/** Persist that the irreversible publish call is about to happen; any later failure is an unknown outcome. */
+async function markAttempted(post: PublishPost) {
+  const marker = await db()
+    .from('posts')
+    .update({ publish_attempted_at: new Date().toISOString() })
+    .eq('id', post.id)
+    .eq('status', 'publishing')
+    .select('id')
+    .single();
+  checkDB(marker.error);
+}
+
+async function flagReconnect(userId: string, platform: SocialPlatform) {
+  await db().from('social_accounts').update({ status: 'reconnect' }).eq('user_id', userId).eq('platform', platform);
+}
+
 export async function processPost(post: PublishPost) {
   let attempted = !!post.publish_attempted_at;
   let publishedId: string | undefined;
@@ -152,7 +185,34 @@ export async function processPost(post: PublishPost) {
     const targetPlatform = post.platform || 'threads';
 
     if (targetPlatform === 'instagram') {
-      publishedId = await processInstagramPublish(post);
+      if (attempted) throw new AppError('Hasil penerbitan belum dapat dipastikan.', 409, 'outcome_unknown');
+      try {
+        publishedId = await processInstagramPublish(post, {
+          containerId: post.container_id,
+          onContainer: async id => {
+            const save = await db()
+              .from('posts')
+              .update({ container_id: id })
+              .eq('id', post.id)
+              .eq('status', 'publishing');
+            checkDB(save.error);
+          },
+          beforePublish: async () => {
+            await markAttempted(post);
+            attempted = true;
+          },
+        });
+      } catch (e) {
+        if (!(e instanceof AppError && e.code === 'media_pending')) throw e;
+        if (post.attempts >= MAX_ATTEMPTS)
+          throw new AppError(
+            'Gambar Instagram mengambil masa terlalu lama untuk diproses. Sila cuba semula.',
+            502,
+            'media_timeout',
+          );
+        await retryLater(post);
+        return;
+      }
       const saved = await db().rpc('complete_publish', { p_id: post.id, p_platform_id: publishedId });
       checkDB(saved.error);
       return;
@@ -213,33 +273,16 @@ export async function processPost(post: PublishPost) {
       await new Promise(r => setTimeout(r, 2000));
     }
     if (!finished) {
-      if (post.attempts >= 8)
+      if (post.attempts >= MAX_ATTEMPTS)
         throw new AppError(
           'Gambar mengambil masa terlalu lama untuk diproses. Sila cuba semula.',
           502,
           'media_timeout',
         );
-      const save = await db()
-        .from('posts')
-        .update({
-          status: 'scheduled',
-          scheduled_at: post.scheduled_at || new Date().toISOString(),
-          next_attempt_at: new Date(Date.now() + 60_000).toISOString(),
-          claimed_at: null,
-        })
-        .eq('id', post.id)
-        .eq('status', 'publishing');
-      checkDB(save.error);
+      await retryLater(post);
       return;
     }
-    const marker = await db()
-      .from('posts')
-      .update({ publish_attempted_at: new Date().toISOString() })
-      .eq('id', post.id)
-      .eq('status', 'publishing')
-      .select('id')
-      .single();
-    checkDB(marker.error);
+    await markAttempted(post);
     attempted = true;
     const published = await threadsRequest<{ id: string }>(
       `v1.0/${account.platform_user_id}/threads_publish`,
@@ -250,11 +293,21 @@ export async function processPost(post: PublishPost) {
     if (!published.id) throw new Error('Missing publish result');
     publishedId = published.id;
 
+    // Threads is already live, so an Instagram failure cannot fail the whole post. It is recorded on the
+    // published post so the user sees it instead of it disappearing into the technical log.
+    let instagramFailure: string | null = null;
     if (targetPlatform === 'both') {
       try {
-        const igId = await processInstagramPublish(post);
+        const igId = await processInstagramPublish(post, { polls: 15 });
         publishedId = `${published.id},${igId}`;
       } catch (igErr) {
+        const reconnect = reconnectPlatform(igErr);
+        if (reconnect) await flagReconnect(post.user_id, reconnect);
+        instagramFailure = reconnect
+          ? 'Diterbitkan di Threads sahaja. Instagram gagal: sila sambungkan semula akaun Instagram anda.'
+          : igErr instanceof AppError && igErr.code !== 'media_pending'
+            ? `Diterbitkan di Threads sahaja. Instagram gagal: ${igErr.message}`
+            : 'Diterbitkan di Threads sahaja. Hasil Instagram belum pasti; semak akaun Instagram anda sebelum menerbitkan semula.';
         await logTechnical(post.user_id, post.id, 'instagram_cross_publish_failed', {
           threads_id: published.id,
           error: (igErr as Error).message,
@@ -264,18 +317,22 @@ export async function processPost(post: PublishPost) {
 
     const saved = await db().rpc('complete_publish', { p_id: post.id, p_platform_id: publishedId });
     checkDB(saved.error);
+    if (instagramFailure) {
+      const flagged = await db()
+        .from('posts')
+        .update({ error_code: 'instagram_failed', error_message: instagramFailure })
+        .eq('id', post.id)
+        .eq('status', 'published');
+      checkDB(flagged.error);
+    }
   } catch (e) {
     const unknown = attempted || (e instanceof AppError && e.code === 'outcome_unknown');
-    const reconnect =
-      (e instanceof ThreadsError && (e.providerCode === 190 || e.status === 401)) ||
-      (e instanceof AppError && (e.code === 'reconnect' || e.code === 'reconnect_instagram'));
-    if (reconnect) {
-      await db().from('social_accounts').update({ status: 'reconnect' }).eq('user_id', post.user_id);
-    }
+    const reconnect = reconnectPlatform(e);
+    if (reconnect) await flagReconnect(post.user_id, reconnect);
     const message = unknown
       ? 'Hasil penerbitan belum pasti. Semak akaun sosial dan hubungi pentadbir sebelum mencuba lagi.'
       : reconnect
-        ? 'Post gagal diterbitkan. Sila sambungkan semula akaun anda.'
+        ? `Post gagal diterbitkan. Sila sambungkan semula akaun ${platformName(reconnect)} anda.`
         : e instanceof AppError
           ? e.message
           : 'Post gagal diterbitkan. Sila cuba lagi sebentar.';
@@ -299,15 +356,26 @@ export async function processPost(post: PublishPost) {
     await logTechnical(post.user_id, post.id, 'publish_failed', {
       unknown,
       platform_post_id: publishedId || null,
-      provider_code: e instanceof ThreadsError ? e.providerCode : null,
+      provider_code: e instanceof ThreadsError || e instanceof InstagramError ? e.providerCode : null,
     });
   }
 }
+// The cron fires every minute. Keep claiming batches (10 in parallel, the DB maximum) while there is due work,
+// but stop starting new batches after ~30 s so runs rarely overlap; overlapping runs are still safe (SKIP LOCKED).
+const BATCH_SIZE = 10,
+  BATCH_WINDOW_MS = 30_000;
 export async function runDuePosts() {
-  const { data, error } = await db().rpc('claim_due_posts', { p_limit: 4 });
-  checkDB(error);
-  await Promise.all((data || []).map((p: PublishPost) => processPost(p)));
-  return { processed: data?.length || 0 };
+  const started = Date.now();
+  let processed = 0;
+  while (Date.now() - started < BATCH_WINDOW_MS) {
+    const { data, error } = await db().rpc('claim_due_posts', { p_limit: BATCH_SIZE });
+    checkDB(error);
+    const batch = (data || []) as PublishPost[];
+    await Promise.all(batch.map(p => processPost(p)));
+    processed += batch.length;
+    if (batch.length < BATCH_SIZE) break;
+  }
+  return { processed };
 }
 export async function publishNow(userId: string, postId: string) {
   await requireSubscription(userId);
@@ -320,7 +388,7 @@ export async function refreshTokens() {
   const client = db();
   const { data, error } = await client
     .from('social_accounts')
-    .select('id,user_id,access_token_encrypted,expires_at')
+    .select('id,user_id,platform,access_token_encrypted,expires_at')
     .eq('status', 'connected')
     .lt('expires_at', new Date(Date.now() + 7 * 86400_000).toISOString())
     .limit(50);
@@ -330,9 +398,12 @@ export async function refreshTokens() {
     try {
       if (Date.parse(a.expires_at) <= Date.now()) throw new Error('Expired');
       const token = decryptToken(a.access_token_encrypted, a.user_id, env('TOKEN_ENCRYPTION_KEY'));
-      const next = await threadsRequest<{ access_token: string; expires_in: number }>('refresh_access_token', token, {
-        grant_type: 'th_refresh_token',
-      });
+      const next =
+        a.platform === 'instagram'
+          ? await refreshInstagramToken(token)
+          : await threadsRequest<{ access_token: string; expires_in: number }>('refresh_access_token', token, {
+              grant_type: 'th_refresh_token',
+            });
       if (!next.access_token || !Number.isFinite(next.expires_in)) throw new Error('Invalid refresh');
       const saved = await client
         .from('social_accounts')
@@ -359,5 +430,19 @@ export async function refreshTokens() {
     .update({ status: 'uncertain' })
     .eq('status', 'reserved')
     .lt('created_at', new Date(Date.now() - 15 * 60_000).toISOString());
-  return { refreshed };
+  // Delete stored images no post has referenced for a week (unsaved AI images, deleted posts).
+  let imagesRemoved = 0;
+  const orphans = await client.rpc('orphan_images', { p_limit: 500 });
+  if (orphans.error) await logTechnical(null, null, 'orphan_scan_failed', { code: orphans.error.code || null });
+  else {
+    const names = ((orphans.data || []) as unknown[])
+      .map(v => (typeof v === 'string' ? v : (v as { orphan_images?: string }).orphan_images))
+      .filter((v): v is string => !!v);
+    if (names.length) {
+      const removed = await client.storage.from('post-images').remove(names);
+      if (removed.error) await logTechnical(null, null, 'orphan_cleanup_failed');
+      else imagesRemoved = names.length;
+    }
+  }
+  return { refreshed, imagesRemoved };
 }
