@@ -41,8 +41,8 @@ export async function alertOperations(event: string, detail: Record<string, unkn
   if (url.protocol !== 'https:') throw new Error('ALERT_WEBHOOK_URL must use HTTPS.');
   await fetch(url, {
     method: 'POST',
-    headers: {'content-type': 'application/json'},
-    body: JSON.stringify({text:`RB Post alert: ${event}`,event,...detail}),
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ text: `RB Post alert: ${event}`, event, ...detail }),
     signal: AbortSignal.timeout(5_000),
   });
 }

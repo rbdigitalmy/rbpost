@@ -14,9 +14,14 @@ test('demo: create, preview, upload, save, reload, schedule, filter and delete',
   await expect(page.locator('.thread-caption')).toContainText('coffee shop');
 
   await page.getByLabel('Internal title').fill('Morning coffee — test');
-  await page.getByLabel('Caption', { exact: true }).fill('A fresh cup of coffee, a brand new story. What is your go-to brew today?');
+  await page
+    .getByLabel('Caption', { exact: true })
+    .fill('A fresh cup of coffee, a brand new story. What is your go-to brew today?');
 
-  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a3l8AAAAASUVORK5CYII=', 'base64');
+  const png = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a3l8AAAAASUVORK5CYII=',
+    'base64',
+  );
   await page.getByLabel('Choose image').setInputFiles({ name: 'test.png', mimeType: 'image/png', buffer: png });
   await expect(page.getByAltText('Preview visual Threads')).toBeVisible();
 
@@ -30,7 +35,9 @@ test('demo: create, preview, upload, save, reload, schedule, filter and delete',
   await page.reload();
   await page.getByLabel('Search posts').fill('Morning coffee');
   await page.getByRole('link', { name: /Morning coffee — test A fresh/ }).click();
-  await expect(page.getByLabel('Caption', { exact: true })).toHaveValue('A fresh cup of coffee, a brand new story. What is your go-to brew today?');
+  await expect(page.getByLabel('Caption', { exact: true })).toHaveValue(
+    'A fresh cup of coffee, a brand new story. What is your go-to brew today?',
+  );
 
   await page.getByRole('button', { name: 'Schedule post', exact: true }).click();
   const date = new Date(Date.now() + 2 * 86400_000).toISOString().slice(0, 10) + 'T09:30';
@@ -67,7 +74,10 @@ test('threads oauth authorization page loads correctly', async ({ page }) => {
   expect(page.url()).toContain('threads.com');
 });
 
-test('validation, demo publishing guard, modal focus and missing production configuration', async ({ page, request }) => {
+test('validation, demo publishing guard, modal focus and missing production configuration', async ({
+  page,
+  request,
+}) => {
   await page.goto('/demo/create');
   await page.getByRole('button', { name: /Generate post with AI/ }).click();
   await expect(page.locator('.form-error')).toContainText('Please enter a topic');

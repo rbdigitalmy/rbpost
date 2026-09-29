@@ -16,7 +16,13 @@ test('Netlify owns deployment scheduling without a competing Vercel cron', () =>
 });
 
 test('public legal documents and operational configuration are present', () => {
-  for (const file of ['src/app/privacy/page.tsx','src/app/terms/page.tsx','src/app/data-deletion/page.tsx','src/app/robots.ts','src/app/sitemap.ts']) {
+  for (const file of [
+    'src/app/privacy/page.tsx',
+    'src/app/terms/page.tsx',
+    'src/app/data-deletion/page.tsx',
+    'src/app/robots.ts',
+    'src/app/sitemap.ts',
+  ]) {
     assert.equal(fs.existsSync(file), true, file);
   }
   const example = fs.readFileSync('.env.example', 'utf8');

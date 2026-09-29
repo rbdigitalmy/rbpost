@@ -36,7 +36,7 @@ async function verify() {
   if (sbUrl && sbAnon && sbRole) {
     try {
       const res = await fetch(sbUrl + '/rest/v1/plans?select=*', {
-        headers: { 'apikey': sbRole, 'Authorization': 'Bearer ' + sbRole }
+        headers: { apikey: sbRole, Authorization: 'Bearer ' + sbRole },
       });
       if (res.ok) {
         const plans = await res.json();
@@ -52,7 +52,7 @@ async function verify() {
 
       // Check storage bucket
       const bucketRes = await fetch(sbUrl + '/storage/v1/bucket/post-images', {
-        headers: { 'apikey': sbRole, 'Authorization': 'Bearer ' + sbRole }
+        headers: { apikey: sbRole, Authorization: 'Bearer ' + sbRole },
       });
       if (bucketRes.ok) {
         bucketStatus = 'Aktif (post-images)';
@@ -73,21 +73,21 @@ async function verify() {
   report.push({
     Komponen: 'Token Encryption Key',
     Status: encKey.length === 64 && /^[0-9a-fA-F]+$/.test(encKey) ? 'Sah (AES-256)' : 'Perlu 64 hex',
-    Catatan: encKey.length === 64 ? 'Sudah dijana secara rawak' : 'Jana 32-byte hex'
+    Catatan: encKey.length === 64 ? 'Sudah dijana secara rawak' : 'Jana 32-byte hex',
   });
 
   const cronSec = env.CRON_SECRET || '';
   report.push({
     Komponen: 'Cron Secret Key',
     Status: cronSec.length >= 32 ? 'Sah' : 'Perlu >= 32 aksara',
-    Catatan: cronSec.length >= 32 ? 'Kawalan auto-publish selamat' : 'Isi CRON_SECRET'
+    Catatan: cronSec.length >= 32 ? 'Kawalan auto-publish selamat' : 'Isi CRON_SECRET',
   });
 
   const aiKey = env.OPENROUTER_API_KEY || '';
   report.push({
     Komponen: 'OpenRouter (AI Copy & Visual)',
     Status: aiKey ? 'Kunci Dikesan' : 'Belum Diisi',
-    Catatan: aiKey ? ('Model: ' + (env.COPY_MODEL || 'gpt-4.1-mini')) : 'Dapatkan dari openrouter.ai/keys'
+    Catatan: aiKey ? 'Model: ' + (env.COPY_MODEL || 'gpt-4.1-mini') : 'Dapatkan dari openrouter.ai/keys',
   });
 
   const metaId = env.META_APP_ID || '';
@@ -95,14 +95,18 @@ async function verify() {
   report.push({
     Komponen: 'Meta API (Threads & IG)',
     Status: metaId && metaSec ? 'Kunci Dikesan' : 'Belum Diisi',
-    Catatan: metaId && metaSec ? ('App ID: ' + metaId) : 'Dapatkan dari developers.facebook.com'
+    Catatan: metaId && metaSec ? 'App ID: ' + metaId : 'Dapatkan dari developers.facebook.com',
   });
 
   const stripeKey = env.STRIPE_SECRET_KEY || '';
   report.push({
     Komponen: 'Stripe (Billing)',
     Status: stripeKey ? 'Kunci Dikesan' : 'Belum Diisi',
-    Catatan: stripeKey ? (stripeKey.startsWith('sk_test_') ? 'Mod Test' : 'Mod Live') : 'Diperlukan untuk pembayaran live'
+    Catatan: stripeKey
+      ? stripeKey.startsWith('sk_test_')
+        ? 'Mod Test'
+        : 'Mod Live'
+      : 'Diperlukan untuk pembayaran live',
   });
 
   console.table(report);

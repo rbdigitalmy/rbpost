@@ -10,7 +10,11 @@ import { publishImageUrl } from './images';
 const GRAPH_URL = 'https://graph.instagram.com/v21.0';
 
 export class InstagramError extends Error {
-  constructor(public status: number, public providerCode: number | null, public details?: unknown) {
+  constructor(
+    public status: number,
+    public providerCode: number | null,
+    public details?: unknown,
+  ) {
     super(`Instagram request failed with status ${status}`);
   }
 }
@@ -19,7 +23,7 @@ export async function instagramRequest<T>(
   path: string,
   token: string | undefined,
   params: Record<string, string> = {},
-  method = 'GET'
+  method = 'GET',
 ): Promise<T> {
   const url = new URL(`${GRAPH_URL}/${path}`);
   if (method === 'GET') {
@@ -113,22 +117,16 @@ export async function finishInstagram(req: Request, userId: string) {
     }
 
     // Step 2: Exchange for long-lived access token
-    const long = await instagramRequest<{ access_token: string; expires_in: number }>(
-      'access_token',
-      undefined,
-      {
-        grant_type: 'ig_exchange_token',
-        client_secret: clientSecret,
-        access_token: shortData.access_token,
-      }
-    );
+    const long = await instagramRequest<{ access_token: string; expires_in: number }>('access_token', undefined, {
+      grant_type: 'ig_exchange_token',
+      client_secret: clientSecret,
+      access_token: shortData.access_token,
+    });
 
     // Step 3: Fetch Instagram user profile
-    const profile = await instagramRequest<{ id: string; username: string }>(
-      'me',
-      long.access_token,
-      { fields: 'id,username' }
-    );
+    const profile = await instagramRequest<{ id: string; username: string }>('me', long.access_token, {
+      fields: 'id,username',
+    });
 
     if (!profile.id || !profile.username || !long.access_token || !Number.isFinite(long.expires_in)) {
       throw new Error('Invalid Instagram OAuth profile response');
@@ -146,19 +144,21 @@ export async function finishInstagram(req: Request, userId: string) {
       return NextResponse.redirect(`${appUrl()}/connections?error=different_account`);
     }
 
-    const saved = await db().from('social_accounts').upsert(
-      {
-        user_id: userId,
-        platform: 'instagram',
-        platform_user_id: profile.id,
-        username: profile.username,
-        access_token_encrypted: encryptToken(long.access_token, userId, env('TOKEN_ENCRYPTION_KEY')),
-        expires_at: new Date(Date.now() + long.expires_in * 1000).toISOString(),
-        status: 'connected',
-        updated_at: new Date().toISOString(),
-      },
-      { onConflict: 'user_id,platform' }
-    );
+    const saved = await db()
+      .from('social_accounts')
+      .upsert(
+        {
+          user_id: userId,
+          platform: 'instagram',
+          platform_user_id: profile.id,
+          username: profile.username,
+          access_token_encrypted: encryptToken(long.access_token, userId, env('TOKEN_ENCRYPTION_KEY')),
+          expires_at: new Date(Date.now() + long.expires_in * 1000).toISOString(),
+          status: 'connected',
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: 'user_id,platform' },
+      );
     checkDB(saved.error);
 
     return NextResponse.redirect(`${appUrl()}/connections?connected=instagram`);
@@ -167,7 +167,7 @@ export async function finishInstagram(req: Request, userId: string) {
     await logTechnical(userId, null, 'instagram_oauth_failed', {
       type: e instanceof InstagramError ? 'provider' : 'internal',
       message: (e as Error).message,
-      details: e instanceof InstagramError ? e.details : String(e)
+      details: e instanceof InstagramError ? e.details : String(e),
     });
     return NextResponse.redirect(`${appUrl()}/connections?error=connection`);
   }
@@ -186,7 +186,12 @@ export async function processInstagramPublish(post: Post & { user_id: string }):
     .maybeSingle();
   checkDB(error);
 
-  if (!account || account.status !== 'connected' || !account.access_token_encrypted || Date.parse(account.expires_at) <= Date.now()) {
+  if (
+    !account ||
+    account.status !== 'connected' ||
+    !account.access_token_encrypted ||
+    Date.parse(account.expires_at) <= Date.now()
+  ) {
     throw new AppError('Sila sambungkan semula akaun Instagram anda.', 409, 'reconnect_instagram');
   }
 
@@ -201,7 +206,7 @@ export async function processInstagramPublish(post: Post & { user_id: string }):
       image_url: publicImg,
       caption: post.caption,
     },
-    'POST'
+    'POST',
   );
 
   if (!container.id) {
@@ -211,11 +216,9 @@ export async function processInstagramPublish(post: Post & { user_id: string }):
   // Step 2: Poll status
   let finished = false;
   for (let i = 0; i < 5; i++) {
-    const status = await instagramRequest<{ status_code?: string; error_message?: string }>(
-      container.id,
-      token,
-      { fields: 'status_code,error_message' }
-    );
+    const status = await instagramRequest<{ status_code?: string; error_message?: string }>(container.id, token, {
+      fields: 'status_code,error_message',
+    });
     if (status.status_code === 'FINISHED') {
       finished = true;
       break;
@@ -223,11 +226,15 @@ export async function processInstagramPublish(post: Post & { user_id: string }):
     if (status.status_code === 'ERROR') {
       throw new AppError(status.error_message || 'Pemprosesan gambar Instagram gagal.', 502, 'media_failed');
     }
-    await new Promise((r) => setTimeout(r, 2000));
+    await new Promise(r => setTimeout(r, 2000));
   }
 
   if (!finished) {
-    throw new AppError('Gambar Instagram mengambil masa terlalu lama untuk diproses. Sila cuba lagi sebentar.', 502, 'media_timeout');
+    throw new AppError(
+      'Gambar Instagram mengambil masa terlalu lama untuk diproses. Sila cuba lagi sebentar.',
+      502,
+      'media_timeout',
+    );
   }
 
   // Step 3: Publish container
@@ -235,7 +242,7 @@ export async function processInstagramPublish(post: Post & { user_id: string }):
     `${account.platform_user_id}/media_publish`,
     token,
     { creation_id: container.id },
-    'POST'
+    'POST',
   );
 
   if (!published.id) {
