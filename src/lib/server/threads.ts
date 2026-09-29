@@ -6,7 +6,7 @@ import { encryptToken, decryptToken } from '../crypto';
 import { type Post } from '../domain';
 import { AppError, appUrl, db, env, checkDB, requireSubscription, logTechnical } from './core';
 import { publishImageUrl } from './images';
-import { InstagramError, ThreadsError, reconnectPlatform, type SocialPlatform } from '../provider-errors';
+import { InstagramError, ThreadsError, errorSummary, reconnectPlatform, type SocialPlatform } from '../provider-errors';
 export { ThreadsError };
 const API = 'https://graph.threads.net';
 export async function threadsRequest<T>(
@@ -28,10 +28,7 @@ export async function threadsRequest<T>(
     cache: 'no-store',
   });
   const value = await response.json();
-  if (!response.ok || value.error) {
-    console.error('threadsRequest failed:', { status: response.status, body: value });
-    throw new ThreadsError(response.status, value.error?.code || null, value);
-  }
+  if (!response.ok || value.error) throw new ThreadsError(response.status, value.error?.code || null, value);
   return value as T;
 }
 export async function startThreads(userId: string) {
@@ -125,12 +122,9 @@ export async function finishThreads(req: Request, userId: string) {
     checkDB(saved.error);
     return NextResponse.redirect(`${appUrl()}/connections?connected=1`);
   } catch (e) {
-    console.error('finishThreads error:', e);
-    await logTechnical(userId, null, 'oauth_failed', {
-      type: e instanceof ThreadsError ? 'provider' : 'internal',
-      message: (e as Error).message,
-      details: e instanceof ThreadsError ? (e as any).details : String(e),
-    });
+    const summary = errorSummary(e);
+    console.error(JSON.stringify({ event: 'oauth_failed', platform: 'threads', ...summary }));
+    await logTechnical(userId, null, 'oauth_failed', summary);
     return NextResponse.redirect(`${appUrl()}/connections?error=connection`);
   }
 }
@@ -297,20 +291,32 @@ export async function processPost(post: PublishPost) {
     // published post so the user sees it instead of it disappearing into the technical log.
     let instagramFailure: string | null = null;
     if (targetPlatform === 'both') {
+      // Only a failure after media_publish was called leaves the Instagram outcome unknown.
+      let igAttempted = false;
       try {
-        const igId = await processInstagramPublish(post, { polls: 15 });
+        const igId = await processInstagramPublish(post, {
+          polls: 15,
+          beforePublish: async () => {
+            igAttempted = true;
+          },
+        });
         publishedId = `${published.id},${igId}`;
       } catch (igErr) {
         const reconnect = reconnectPlatform(igErr);
         if (reconnect) await flagReconnect(post.user_id, reconnect);
-        instagramFailure = reconnect
-          ? 'Diterbitkan di Threads sahaja. Instagram gagal: sila sambungkan semula akaun Instagram anda.'
-          : igErr instanceof AppError && igErr.code !== 'media_pending'
-            ? `Diterbitkan di Threads sahaja. Instagram gagal: ${igErr.message}`
-            : 'Diterbitkan di Threads sahaja. Hasil Instagram belum pasti; semak akaun Instagram anda sebelum menerbitkan semula.';
+        instagramFailure = igAttempted
+          ? 'Diterbitkan di Threads sahaja. Hasil Instagram belum pasti; semak akaun Instagram anda sebelum menerbitkan semula.'
+          : reconnect
+            ? 'Diterbitkan di Threads sahaja. Instagram gagal: sila sambungkan semula akaun Instagram anda.'
+            : igErr instanceof AppError && igErr.code === 'media_pending'
+              ? 'Diterbitkan di Threads sahaja. Instagram belum diterbitkan kerana gambar masih diproses; cuba terbitkan ke Instagram semula.'
+              : igErr instanceof AppError
+                ? `Diterbitkan di Threads sahaja. Instagram gagal: ${igErr.message}`
+                : 'Diterbitkan di Threads sahaja. Instagram gagal diterbitkan; cuba terbitkan ke Instagram semula.';
         await logTechnical(post.user_id, post.id, 'instagram_cross_publish_failed', {
           threads_id: published.id,
-          error: (igErr as Error).message,
+          attempted: igAttempted,
+          ...errorSummary(igErr),
         });
       }
     }
@@ -384,40 +390,67 @@ export async function publishNow(userId: string, postId: string) {
   if (!data?.[0]) throw new AppError('Post sedang diterbitkan atau tidak boleh diterbitkan semula.', 409);
   await processPost(data[0]);
 }
+interface ExpiringAccount {
+  id: string;
+  user_id: string;
+  platform: string;
+  access_token_encrypted: string;
+  expires_at: string;
+}
+/** Returns whether the token was refreshed; on failure the account is flagged for reconnection. */
+async function refreshAccount(a: ExpiringAccount) {
+  const client = db();
+  try {
+    if (Date.parse(a.expires_at) <= Date.now()) throw new Error('Expired');
+    const token = decryptToken(a.access_token_encrypted, a.user_id, env('TOKEN_ENCRYPTION_KEY'));
+    const next =
+      a.platform === 'instagram'
+        ? await refreshInstagramToken(token)
+        : await threadsRequest<{ access_token: string; expires_in: number }>('refresh_access_token', token, {
+            grant_type: 'th_refresh_token',
+          });
+    if (!next.access_token || !Number.isFinite(next.expires_in)) throw new Error('Invalid refresh');
+    const saved = await client
+      .from('social_accounts')
+      .update({
+        access_token_encrypted: encryptToken(next.access_token, a.user_id, env('TOKEN_ENCRYPTION_KEY')),
+        expires_at: new Date(Date.now() + next.expires_in * 1000).toISOString(),
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', a.id);
+    checkDB(saved.error);
+    return true;
+  } catch {
+    await client.from('social_accounts').update({ status: 'reconnect' }).eq('id', a.id);
+    await logTechnical(a.user_id, null, 'token_refresh_failed');
+    return false;
+  }
+}
+// A refreshed or flagged account drops out of the query (later expiry / 'reconnect' status), so keep taking the
+// soonest-expiring page until none are left or the budget (well inside the route's maxDuration) runs out.
+// `seen` skips a row whose status update itself failed, so it cannot be retried forever.
+const REFRESH_PAGE = 50,
+  REFRESH_BUDGET_MS = 150_000;
 export async function refreshTokens() {
   const client = db();
-  const { data, error } = await client
-    .from('social_accounts')
-    .select('id,user_id,platform,access_token_encrypted,expires_at')
-    .eq('status', 'connected')
-    .lt('expires_at', new Date(Date.now() + 7 * 86400_000).toISOString())
-    .limit(50);
-  checkDB(error);
+  const started = Date.now();
+  const seen = new Set<string>();
   let refreshed = 0;
-  for (const a of data || []) {
-    try {
-      if (Date.parse(a.expires_at) <= Date.now()) throw new Error('Expired');
-      const token = decryptToken(a.access_token_encrypted, a.user_id, env('TOKEN_ENCRYPTION_KEY'));
-      const next =
-        a.platform === 'instagram'
-          ? await refreshInstagramToken(token)
-          : await threadsRequest<{ access_token: string; expires_in: number }>('refresh_access_token', token, {
-              grant_type: 'th_refresh_token',
-            });
-      if (!next.access_token || !Number.isFinite(next.expires_in)) throw new Error('Invalid refresh');
-      const saved = await client
-        .from('social_accounts')
-        .update({
-          access_token_encrypted: encryptToken(next.access_token, a.user_id, env('TOKEN_ENCRYPTION_KEY')),
-          expires_at: new Date(Date.now() + next.expires_in * 1000).toISOString(),
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', a.id);
-      checkDB(saved.error);
-      refreshed++;
-    } catch {
-      await client.from('social_accounts').update({ status: 'reconnect' }).eq('id', a.id);
-      await logTechnical(a.user_id, null, 'token_refresh_failed');
+  while (Date.now() - started < REFRESH_BUDGET_MS) {
+    const { data, error } = await client
+      .from('social_accounts')
+      .select('id,user_id,platform,access_token_encrypted,expires_at')
+      .eq('status', 'connected')
+      .lt('expires_at', new Date(Date.now() + 7 * 86400_000).toISOString())
+      .order('expires_at')
+      .limit(REFRESH_PAGE + seen.size);
+    checkDB(error);
+    const batch = ((data || []) as ExpiringAccount[]).filter(a => !seen.has(a.id)).slice(0, REFRESH_PAGE);
+    if (!batch.length) break;
+    for (const a of batch) {
+      if (Date.now() - started >= REFRESH_BUDGET_MS) break;
+      seen.add(a.id);
+      if (await refreshAccount(a)) refreshed++;
     }
   }
   await client

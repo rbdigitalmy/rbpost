@@ -674,7 +674,7 @@ export function BillingView() {
                   {p.monthly_image_limit} image generations
                 </li>
                 <li>
-                  <Check size={17} />1 Threads account
+                  <Check size={17} />1 Threads + 1 Instagram account
                 </li>
                 <li>
                   <Check size={17} />

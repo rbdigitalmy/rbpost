@@ -6,7 +6,7 @@ import { encryptToken, decryptToken } from '../crypto';
 import { type Post } from '../domain';
 import { AppError, appUrl, db, env, checkDB, requireSubscription, logTechnical } from './core';
 import { instagramImageUrl } from './images';
-import { InstagramError } from '../provider-errors';
+import { InstagramError, errorSummary } from '../provider-errors';
 
 export { InstagramError };
 
@@ -108,10 +108,8 @@ export async function finishInstagram(req: Request, userId: string) {
       signal: AbortSignal.timeout(25_000),
     });
     const shortData = await short.json();
-    if (!short.ok || !shortData.access_token) {
-      console.error('Instagram short token failed:', { status: short.status, body: shortData });
-      throw new Error(`Short token failed: ${JSON.stringify(shortData)}`);
-    }
+    if (!short.ok || !shortData.access_token)
+      throw new InstagramError(short.status, shortData.error?.code ?? shortData.code ?? null, shortData);
 
     // Step 2: Exchange for long-lived access token
     const long = await instagramRequest<{ access_token: string; expires_in: number }>('access_token', undefined, {
@@ -166,12 +164,9 @@ export async function finishInstagram(req: Request, userId: string) {
 
     return NextResponse.redirect(`${appUrl()}/connections?connected=instagram`);
   } catch (e) {
-    console.error('finishInstagram error:', e);
-    await logTechnical(userId, null, 'instagram_oauth_failed', {
-      type: e instanceof InstagramError ? 'provider' : 'internal',
-      message: (e as Error).message,
-      details: e instanceof InstagramError ? e.details : String(e),
-    });
+    const summary = errorSummary(e);
+    console.error(JSON.stringify({ event: 'oauth_failed', platform: 'instagram', ...summary }));
+    await logTechnical(userId, null, 'instagram_oauth_failed', summary);
     return NextResponse.redirect(`${appUrl()}/connections?error=connection`);
   }
 }

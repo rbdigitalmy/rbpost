@@ -235,8 +235,6 @@ export default function WorkspaceApp({ demo, section, postId }: { demo: boolean;
         )}
       </main>
     );
-  const plan = data.plans.find(p => p.id === data.subscription?.plan_id);
-  const quota = plan?.monthly_post_limit || 0;
   const context = { data, demo, base, notify, reload, loadMorePublished, setData, savePost, removePost, updatePost };
   return (
     <WorkspaceContext.Provider value={context}>
